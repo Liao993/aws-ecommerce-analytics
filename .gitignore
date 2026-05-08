@@ -1,0 +1,57 @@
+# --- Security & Credentials ---
+profiles.yml
+*.pem
+*.key
+.aws/
+.env
+
+# --- dbt specific ---
+dbt.log
+dbt_modules/
+dbt_packages/
+target/
+
+# DuckDB / Local DBs / data
+*.db
+*.sqlite
+*.parquet
+*.csv
+
+
+
+# --- Python Extras ---
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# --- macOS Extras ---
+Icon
+._*
+.DS_Store
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# log
+logs/
+airflow/logs/
+
+# Others
+great_expectations/uncommitted/
+docs
+#Claude
+.claudeignore
+CLAUDE.md
