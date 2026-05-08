@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+# System deps needed to compile some Python packages
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/app/dbt
+
+# Install dbt with the Redshift adapter
+# dbt-redshift pulls in dbt-core as a dependency automatically
+RUN pip install --no-cache-dir \
+    dbt-core==1.8.* \
+    dbt-redshift==1.8.*
+
+# Confirm installation
+RUN dbt --version
