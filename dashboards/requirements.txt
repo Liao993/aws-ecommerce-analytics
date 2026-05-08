@@ -1,0 +1,14 @@
+# Core Dashboard
+streamlit>=1.30.0
+plotly>=5.18.0
+
+# AWS & Data Connection
+boto3>=1.34.0
+redshift-connector>=2.0.918
+pandas>=2.1.0  # Required for Streamlit dataframes and Plotly
+
+# Utilities
+python-dotenv>=1.0.0  # To load your .env file in Python scripts
+
+# Optional: dbt (Only if your dashboard runs dbt commands directly)
+# dbt-redshift>=1.7.0

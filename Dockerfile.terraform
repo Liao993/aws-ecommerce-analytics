@@ -1,0 +1,10 @@
+FROM hashicorp/terraform:1.7
+
+# The official Terraform image is Alpine-based and has terraform already on PATH.
+# We only need to set the working directory — no pip, no apt needed.
+
+WORKDIR /workspace
+
+# Default entrypoint from the base image is `terraform`.
+# docker compose run terraform init   → runs terraform init
+# docker compose run terraform apply  → runs terraform apply

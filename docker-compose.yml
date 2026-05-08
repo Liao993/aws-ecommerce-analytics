@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+
+  # ─────────────────────────────────────────────
+  # dbt — transformation layer
+  # ─────────────────────────────────────────────
+  dbt:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbt
+    container_name: olist_dbt
+    working_dir: /usr/app/dbt
+    volumes:
+      - ./dbt_project:/usr/app/dbt
+    env_file:
+      - .env
+    command: ["tail", "-f", "/dev/null"]   # keeps container alive for exec commands
+
+  # ─────────────────────────────────────────────
+  # streamlit — dashboard layer
+  # ─────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: olist_streamlit
+    volumes:
+      - ./dashboards:/app
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
+
+  # ─────────────────────────────────────────────
+  # terraform — IaC layer
+  # ─────────────────────────────────────────────
+  terraform:
+    build:
+      context: .
+      dockerfile: Dockerfile.terraform
+    container_name: olist_terraform
+    volumes:
+      - ./terraform:/workspace
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+    command: ["tail", "-f", "/dev/null"]   # keeps container alive for exec commands
