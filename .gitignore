@@ -4,6 +4,7 @@ profiles.yml
 *.key
 .aws/
 .env
+credentials/
 
 # --- dbt specific ---
 dbt.log
@@ -52,6 +53,7 @@ airflow/logs/
 # Others
 great_expectations/uncommitted/
 docs
+
 #Claude
 .claudeignore
 CLAUDE.md

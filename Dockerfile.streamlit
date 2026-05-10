@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     redshift_connector \
     boto3
 
-EXPOSE 8501
+EXPOSE 85031
 
 # Streamlit must bind to 0.0.0.0 inside Docker to be reachable from the host
 CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
