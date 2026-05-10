@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "bucket_name" {
   description = "S3 bucket name for the data lake"
   type        = string
-  default     = "olist-ecommerce-henry"
+  default     = "olist-ecommerce-tara888"
 }
 
 variable "project_name" {
