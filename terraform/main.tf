@@ -85,11 +85,21 @@ resource "aws_s3_object" "prefixes" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# IAM — Shared trust policy (allows role assumption by IAM users
-# within this account). Each role gets the same trust document —
-# what differs is the *permission* policies attached below.
+# IAM — Trust policies
+#
+# assume_role_base       → shared by ae, junior_de, readonly
+#                          allows IAM principals in this account only
+#
+# assume_role_admin      → admin role only, requires MFA
+#
+# assume_role_senior_de  → NEW (line 105–130): senior_de only
+#                          allows IAM principals AND glue.amazonaws.com
+#                          Glue needs to assume this role when running
+#                          crawlers and ETL jobs — without this trust
+#                          statement the crawler fails with a service error
 # ─────────────────────────────────────────────────────────────────
 
+# UNCHANGED — still used by ae, junior_de, readonly (roles 3, 4, 5)
 data "aws_iam_policy_document" "assume_role_base" {
   statement {
     effect  = "Allow"
@@ -102,8 +112,7 @@ data "aws_iam_policy_document" "assume_role_base" {
   }
 }
 
-# Admin trust policy — same base but with an MFA condition.
-# Without MFA the AssumeRole call is denied even for admins.
+# UNCHANGED — admin role still requires MFA
 data "aws_iam_policy_document" "assume_role_admin" {
   statement {
     effect  = "Allow"
@@ -122,14 +131,47 @@ data "aws_iam_policy_document" "assume_role_admin" {
   }
 }
 
+# ── CHANGE 1 (new block, after line 103 in original) ─────────────
+# NEW trust policy for senior_de only.
+# Two principals:
+#   1. AWS IAM root → lets you (and Airflow/EC2) assume this role
+#   2. glue.amazonaws.com → lets the Glue SERVICE assume this role
+#      when running crawlers and ETL jobs on your behalf.
+#
+# Why Glue needs this:
+#   When you click "Run crawler" in the console (or Airflow triggers it),
+#   it is the Glue SERVICE that assumes olist-senior-de-role to read S3
+#   and write to the Data Catalog. If glue.amazonaws.com is not in the
+#   trust policy, AWS rejects the AssumeRole call → "service error".
+# ─────────────────────────────────────────────────────────────────
+data "aws_iam_policy_document" "assume_role_senior_de" {
+  # IAM principals (you, Airflow on EC2) can assume this role
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  # Glue service can assume this role for crawlers and ETL jobs
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["glue.amazonaws.com"]
+    }
+  }
+}
+# ── END CHANGE 1 ─────────────────────────────────────────────────
+
 # ─────────────────────────────────────────────────────────────────
 # ROLE 1 — olist-admin-role
-# Who:    You, the developer, during infrastructure work only
-# Trust:  Any IAM principal in this account — BUT only if MFA is active
-# Perms:  AdministratorAccess (AWS managed policy — full access)
-# Why:    Root user is never used after day 1. This role is your
-#         emergency hatch. MFA condition means a stolen key alone
-#         cannot assume it.
+# UNCHANGED
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "admin" {
@@ -146,16 +188,15 @@ resource "aws_iam_role_policy_attachment" "admin_full" {
 
 # ─────────────────────────────────────────────────────────────────
 # ROLE 2 — olist-senior-de-role
-# Who:    The pipeline builder — Glue jobs, Airflow on EC2, Lambda
-# Trust:  IAM principals in this account (no MFA required for
-#         automation — Airflow/Lambda can't prompt for MFA)
-# Perms:  S3 full + Glue full + Redshift full + Lambda invoke +
-#         CloudWatch logs (for DAG failure alarms)
+# ── CHANGE 2 (was line 156 in original) ──────────────────────────
+# assume_role_policy now points to assume_role_senior_de
+# (was assume_role_base — which did not include glue.amazonaws.com)
+# Everything else in this role block is UNCHANGED.
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "senior_de" {
   name               = "${var.project_name}-senior-de-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_base.json
+  assume_role_policy = data.aws_iam_policy_document.assume_role_senior_de.json # ← CHANGED
 
   tags = { Role = "senior-de" }
 }
@@ -220,12 +261,8 @@ resource "aws_iam_role_policy" "senior_de" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 3 — olist-ae-role  (Analytics Engineer / dbt)
-# Who:    dbt running transformations in Redshift
-# Trust:  IAM principals in this account (dbt runs in Docker/CI)
-# Perms:  Redshift read/write on staging, intermediate, marts schemas
-#         S3 read on processed/ (dbt may reference external stages)
-#         No Glue, no Lambda, no raw schema access
+# ROLE 3 — olist-ae-role
+# UNCHANGED — still uses assume_role_base (no Glue trust needed)
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "ae" {
@@ -236,9 +273,6 @@ resource "aws_iam_role" "ae" {
 }
 
 data "aws_iam_policy_document" "ae_perms" {
-  # Redshift — connect, run queries, manage tables in staging/intermediate/marts
-  # Note: Redshift schema-level permissions are enforced inside the DB (via GRANT),
-  # not via IAM. This IAM policy grants the ability to connect and use the API.
   statement {
     sid    = "RedshiftConnect"
     effect = "Allow"
@@ -255,7 +289,6 @@ data "aws_iam_policy_document" "ae_perms" {
     resources = ["*"]
   }
 
-  # S3 read on processed/ — dbt may query external tables backed by S3 Parquet
   statement {
     sid     = "S3ReadProcessed"
     effect  = "Allow"
@@ -276,11 +309,7 @@ resource "aws_iam_role_policy" "ae" {
 
 # ─────────────────────────────────────────────────────────────────
 # ROLE 4 — olist-junior-de-role
-# Who:    A junior who can inspect the pipeline but not modify it
-# Trust:  IAM principals in this account
-# Perms:  S3 read (dev prefix only) + Glue read (no create/delete)
-#         + Redshift connect (raw schema — enforced in DB via GRANT)
-#         Cannot write to S3, cannot modify Glue jobs, cannot touch prod
+# UNCHANGED — still uses assume_role_base
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "junior_de" {
@@ -291,7 +320,6 @@ resource "aws_iam_role" "junior_de" {
 }
 
 data "aws_iam_policy_document" "junior_de_perms" {
-  # S3 read — dev prefix only; cannot see prod data
   statement {
     sid     = "S3ReadDev"
     effect  = "Allow"
@@ -302,7 +330,6 @@ data "aws_iam_policy_document" "junior_de_perms" {
     ]
   }
 
-  # Glue read-only — can inspect jobs and catalog, cannot run or modify
   statement {
     sid    = "GlueReadOnly"
     effect = "Allow"
@@ -323,7 +350,6 @@ data "aws_iam_policy_document" "junior_de_perms" {
     resources = ["*"]
   }
 
-  # Redshift connect — raw schema access enforced via GRANT inside Redshift
   statement {
     sid    = "RedshiftReadRaw"
     effect = "Allow"
@@ -348,11 +374,7 @@ resource "aws_iam_role_policy" "junior_de" {
 
 # ─────────────────────────────────────────────────────────────────
 # ROLE 5 — olist-readonly-role
-# Who:    Data analysts, sales team, Streamlit dashboard queries
-# Trust:  IAM principals in this account
-# Perms:  Redshift connect only — analytics schema read enforced via
-#         GRANT inside Redshift. Zero S3, zero Glue, zero Lambda.
-#         Cannot see raw data, pipeline config, or prod infrastructure.
+# UNCHANGED — still uses assume_role_base
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "readonly" {
@@ -363,7 +385,6 @@ resource "aws_iam_role" "readonly" {
 }
 
 data "aws_iam_policy_document" "readonly_perms" {
-  # Redshift connect — analytics schema read enforced inside the DB
   statement {
     sid    = "RedshiftReadAnalytics"
     effect = "Allow"
@@ -384,4 +405,61 @@ resource "aws_iam_role_policy" "readonly" {
   name   = "${var.project_name}-readonly-policy"
   role   = aws_iam_role.readonly.id
   policy = data.aws_iam_policy_document.readonly_perms.json
+}
+
+# ─────────────────────────────────────────────────────────────────
+# GLUE DATA CATALOG DATABASE
+# ── CHANGE 3 (new resource, added at end of file) ────────────────
+# Creates the "olist_dev_raw" metadata database in the Glue Data Catalog.
+# This is NOT a Redshift database — it is a namespace inside Glue where
+# the crawler registers table schemas discovered from S3.
+#
+# Before this change: you had to create it manually in the console
+# (Step 2 of Feature 1.4 → "Target database: create new → olist_dev_raw").
+# After this change: terraform apply creates it automatically.
+# ─────────────────────────────────────────────────────────────────
+resource "aws_glue_catalog_database" "dev_raw" {
+  name        = "olist_dev_raw"
+  description = "Glue Data Catalog database for raw Olist CSVs — schema metadata only, no data stored here"
+}
+
+# ─────────────────────────────────────────────────────────────────
+# GLUE CRAWLER
+# ── CHANGE 4 (new resource, added at end of file) ────────────────
+# Crawls s3://<bucket>/dev/raw/, infers schemas from the 9 Olist CSVs,
+# and registers them as tables in olist_dev_raw above.
+#
+# role = senior_de — the crawler assumes olist-senior-de-role at runtime.
+#   This works now because CHANGE 1 added glue.amazonaws.com to that
+#   role's trust policy. Before CHANGE 1, this would produce a service error.
+#
+# schedule is omitted → on-demand only. Run it from the console or via
+# Airflow's GlueCrawlerOperator at the start of the DAG.
+#
+# configuration JSON tells the crawler:
+#   - Version 1.0 of the config schema
+#   - CrawlerOutput: set tables to MergeNewColumns mode so re-running
+#     the crawler adds any new columns without deleting existing ones.
+#     This prevents accidental schema wipes if a CSV is re-uploaded.
+# ─────────────────────────────────────────────────────────────────
+resource "aws_glue_crawler" "dev_raw" {
+  name          = "${var.project_name}-dev-raw-crawler"
+  database_name = aws_glue_catalog_database.dev_raw.name
+  role          = aws_iam_role.senior_de.arn
+  description   = "Crawls dev/raw/ CSVs and registers schemas in the Glue Data Catalog"
+
+  s3_target {
+    path = "s3://${var.bucket_name}/dev/raw/"
+  }
+
+  configuration = jsonencode({
+    Version = 1.0
+    CrawlerOutput = {
+      Tables = { AddOrUpdateBehavior = "MergeNewColumns" }
+    }
+  })
+
+  tags = {
+    Role = "senior-de"
+  }
 }

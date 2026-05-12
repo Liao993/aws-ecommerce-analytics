@@ -5,6 +5,7 @@ profiles.yml
 .aws/
 .env
 credentials/
+data/
 
 # --- dbt specific ---
 dbt.log
