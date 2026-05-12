@@ -32,3 +32,13 @@ output "readonly_role_arn" {
   description = "ARN of the read-only analyst / sales IAM role"
   value       = aws_iam_role.readonly.arn
 }
+
+output "glue_job_name" {
+  description = "Name of the Glue ETL job"
+  value       = aws_glue_job.csv_to_parquet.name
+}
+
+output "glue_crawler_name" {
+  description = "Name of the Glue raw crawler"
+  value       = aws_glue_crawler.dev_raw.name
+}

@@ -25,7 +25,7 @@ provider "aws" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# Data source — current AWS account ID (used in IAM policy ARNs)
+# Data Sources
 # ─────────────────────────────────────────────────────────────────
 
 data "aws_caller_identity" "current" {}
@@ -42,7 +42,6 @@ resource "aws_s3_bucket" "data_lake" {
   }
 }
 
-# Block all public access — this is a private data lake
 resource "aws_s3_bucket_public_access_block" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
 
@@ -52,7 +51,6 @@ resource "aws_s3_bucket_public_access_block" "data_lake" {
   restrict_public_buckets = true
 }
 
-# Versioning — enables replay and recovery of raw source files
 resource "aws_s3_bucket_versioning" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
   versioning_configuration {
@@ -60,9 +58,8 @@ resource "aws_s3_bucket_versioning" "data_lake" {
   }
 }
 
-# Prefix placeholder objects — S3 has no real "folders";
-# zero-byte objects with a trailing slash simulate the structure
-# so the console and Glue Crawlers see the expected layout.
+# S3 has no real folders — zero-byte objects simulate the prefix
+# structure so the console and Glue Crawlers see the expected layout.
 locals {
   s3_prefixes = [
     "dev/raw/",
@@ -85,21 +82,19 @@ resource "aws_s3_object" "prefixes" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# IAM — Trust policies
+# IAM — Trust Policies
 #
-# assume_role_base       → shared by ae, junior_de, readonly
-#                          allows IAM principals in this account only
+# assume_role_base      shared by ae, junior_de, readonly
+#                       IAM principals in this account only
 #
-# assume_role_admin      → admin role only, requires MFA
+# assume_role_admin     admin only, MFA required
 #
-# assume_role_senior_de  → NEW (line 105–130): senior_de only
-#                          allows IAM principals AND glue.amazonaws.com
-#                          Glue needs to assume this role when running
-#                          crawlers and ETL jobs — without this trust
-#                          statement the crawler fails with a service error
+# assume_role_senior_de senior_de only
+#                       IAM principals + glue.amazonaws.com
+#                       Glue must assume this role to run crawlers
+#                       and ETL jobs — without it you get a service error
 # ─────────────────────────────────────────────────────────────────
 
-# UNCHANGED — still used by ae, junior_de, readonly (roles 3, 4, 5)
 data "aws_iam_policy_document" "assume_role_base" {
   statement {
     effect  = "Allow"
@@ -112,7 +107,6 @@ data "aws_iam_policy_document" "assume_role_base" {
   }
 }
 
-# UNCHANGED — admin role still requires MFA
 data "aws_iam_policy_document" "assume_role_admin" {
   statement {
     effect  = "Allow"
@@ -131,19 +125,6 @@ data "aws_iam_policy_document" "assume_role_admin" {
   }
 }
 
-# ── CHANGE 1 (new block, after line 103 in original) ─────────────
-# NEW trust policy for senior_de only.
-# Two principals:
-#   1. AWS IAM root → lets you (and Airflow/EC2) assume this role
-#   2. glue.amazonaws.com → lets the Glue SERVICE assume this role
-#      when running crawlers and ETL jobs on your behalf.
-#
-# Why Glue needs this:
-#   When you click "Run crawler" in the console (or Airflow triggers it),
-#   it is the Glue SERVICE that assumes olist-senior-de-role to read S3
-#   and write to the Data Catalog. If glue.amazonaws.com is not in the
-#   trust policy, AWS rejects the AssumeRole call → "service error".
-# ─────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_role_senior_de" {
   # IAM principals (you, Airflow on EC2) can assume this role
   statement {
@@ -156,7 +137,7 @@ data "aws_iam_policy_document" "assume_role_senior_de" {
     }
   }
 
-  # Glue service can assume this role for crawlers and ETL jobs
+  # Glue service assumes this role when running crawlers and ETL jobs
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRole"]
@@ -167,11 +148,10 @@ data "aws_iam_policy_document" "assume_role_senior_de" {
     }
   }
 }
-# ── END CHANGE 1 ─────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 1 — olist-admin-role
-# UNCHANGED
+# IAM — Role 1: Admin
+# Full AdministratorAccess, MFA required to assume
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "admin" {
@@ -187,22 +167,19 @@ resource "aws_iam_role_policy_attachment" "admin_full" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 2 — olist-senior-de-role
-# ── CHANGE 2 (was line 156 in original) ──────────────────────────
-# assume_role_policy now points to assume_role_senior_de
-# (was assume_role_base — which did not include glue.amazonaws.com)
-# Everything else in this role block is UNCHANGED.
+# IAM — Role 2: Senior DE
+# S3 full + Glue full + Redshift full + Lambda invoke + CloudWatch
+# Trusted by glue.amazonaws.com so Glue can assume it for jobs
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "senior_de" {
   name               = "${var.project_name}-senior-de-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_senior_de.json # ← CHANGED
+  assume_role_policy = data.aws_iam_policy_document.assume_role_senior_de.json
 
   tags = { Role = "senior-de" }
 }
 
 data "aws_iam_policy_document" "senior_de_perms" {
-  # Full S3 access on the project bucket only
   statement {
     sid     = "S3FullProjectBucket"
     effect  = "Allow"
@@ -213,7 +190,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     ]
   }
 
-  # Full Glue — create/run crawlers, ETL jobs, manage Data Catalog
   statement {
     sid       = "GlueFull"
     effect    = "Allow"
@@ -221,7 +197,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["*"]
   }
 
-  # Full Redshift — create schemas, run COPY, manage workgroups
   statement {
     sid       = "RedshiftFull"
     effect    = "Allow"
@@ -229,7 +204,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["*"]
   }
 
-  # Lambda invoke only — senior DE triggers functions but does not manage them
   statement {
     sid       = "LambdaInvoke"
     effect    = "Allow"
@@ -237,7 +211,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-*"]
   }
 
-  # CloudWatch — write logs, create alarms, describe metrics
   statement {
     sid    = "CloudWatchLogs"
     effect = "Allow"
@@ -261,8 +234,9 @@ resource "aws_iam_role_policy" "senior_de" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 3 — olist-ae-role
-# UNCHANGED — still uses assume_role_base (no Glue trust needed)
+# IAM — Role 3: AE (Analytics Engineer / dbt)
+# Redshift read/write on staging + intermediate + marts
+# S3 read on processed/ only
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "ae" {
@@ -308,8 +282,8 @@ resource "aws_iam_role_policy" "ae" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 4 — olist-junior-de-role
-# UNCHANGED — still uses assume_role_base
+# IAM — Role 4: Junior DE
+# S3 read on dev/ only + Glue read-only + Redshift read on raw schema
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "junior_de" {
@@ -373,8 +347,9 @@ resource "aws_iam_role_policy" "junior_de" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 5 — olist-readonly-role
-# UNCHANGED — still uses assume_role_base
+# IAM — Role 5: Read-only (DA / Sales)
+# Redshift read-only on analytics schema only
+# Zero access to raw data or pipeline infrastructure
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "readonly" {
@@ -408,40 +383,25 @@ resource "aws_iam_role_policy" "readonly" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# GLUE DATA CATALOG DATABASE
-# ── CHANGE 3 (new resource, added at end of file) ────────────────
-# Creates the "olist_dev_raw" metadata database in the Glue Data Catalog.
-# This is NOT a Redshift database — it is a namespace inside Glue where
-# the crawler registers table schemas discovered from S3.
-#
-# Before this change: you had to create it manually in the console
-# (Step 2 of Feature 1.4 → "Target database: create new → olist_dev_raw").
-# After this change: terraform apply creates it automatically.
+# Glue — Data Catalog Database
+# Metadata namespace for raw Olist CSV schemas.
+# NOT a Redshift database — no data is stored here,
+# only schema definitions discovered by the crawler.
 # ─────────────────────────────────────────────────────────────────
+
 resource "aws_glue_catalog_database" "dev_raw" {
   name        = "olist_dev_raw"
-  description = "Glue Data Catalog database for raw Olist CSVs — schema metadata only, no data stored here"
+  description = "Schema metadata for raw Olist CSVs in dev/raw/"
 }
 
 # ─────────────────────────────────────────────────────────────────
-# GLUE CRAWLER
-# ── CHANGE 4 (new resource, added at end of file) ────────────────
-# Crawls s3://<bucket>/dev/raw/, infers schemas from the 9 Olist CSVs,
-# and registers them as tables in olist_dev_raw above.
-#
-# role = senior_de — the crawler assumes olist-senior-de-role at runtime.
-#   This works now because CHANGE 1 added glue.amazonaws.com to that
-#   role's trust policy. Before CHANGE 1, this would produce a service error.
-#
-# schedule is omitted → on-demand only. Run it from the console or via
-# Airflow's GlueCrawlerOperator at the start of the DAG.
-#
-# configuration JSON tells the crawler:
-#   - Version 1.0 of the config schema
-#   - CrawlerOutput: set tables to MergeNewColumns mode so re-running
-#     the crawler adds any new columns without deleting existing ones.
-#     This prevents accidental schema wipes if a CSV is re-uploaded.
+# Glue — Crawler
+# Crawls dev/raw/, infers schemas from the 9 Olist CSVs, and
+# registers them as tables in olist_dev_raw above.
+# Schedule omitted — on-demand, triggered manually or by Airflow.
+# MergeNewColumns prevents re-runs from wiping existing columns.
 # ─────────────────────────────────────────────────────────────────
+
 resource "aws_glue_crawler" "dev_raw" {
   name          = "${var.project_name}-dev-raw-crawler"
   database_name = aws_glue_catalog_database.dev_raw.name
@@ -459,7 +419,52 @@ resource "aws_glue_crawler" "dev_raw" {
     }
   })
 
-  tags = {
-    Role = "senior-de"
+  tags = { Role = "senior-de" }
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Glue — ETL Job: csv_to_parquet (Feature 1.4)
+#
+# Reads all 9 raw CSV tables from the Data Catalog and writes them
+# to dev/processed/ as Snappy-compressed Parquet. Date-partitioned
+# tables (orders, reviews) get year/month folder structure for
+# Athena partition pruning.
+#
+# extra-py-files: the four helper modules main.py imports at runtime.
+# Glue adds these to the Python path so local imports resolve.
+# Without this, Glue only sees main.py and throws ModuleNotFoundError.
+#
+# G.1X / 2 workers: sufficient for 100K-row Olist dataset.
+# Scale number_of_workers for larger datasets in future epics.
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_glue_job" "csv_to_parquet" {
+  name        = "${var.project_name}-csv-to-parquet"
+  role_arn    = aws_iam_role.senior_de.arn
+  description = "Converts raw Olist CSVs to Snappy Parquet in dev/processed/"
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/main.py"
+    python_version  = "3"
   }
+
+  default_arguments = {
+    "--extra-py-files" = join(",", [
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/config.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/readers.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/transformers.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/writers.py",
+    ])
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-glue-datacatalog"          = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-metrics"                   = "true"
+  }
+
+  glue_version      = "4.0"
+  number_of_workers = 2
+  worker_type       = "G.1X"
+
+  tags = { Role = "senior-de" }
 }
