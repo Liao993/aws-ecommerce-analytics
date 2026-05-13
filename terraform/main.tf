@@ -25,7 +25,7 @@ provider "aws" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# Data source — current AWS account ID (used in IAM policy ARNs)
+# Data Sources
 # ─────────────────────────────────────────────────────────────────
 
 data "aws_caller_identity" "current" {}
@@ -42,7 +42,6 @@ resource "aws_s3_bucket" "data_lake" {
   }
 }
 
-# Block all public access — this is a private data lake
 resource "aws_s3_bucket_public_access_block" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
 
@@ -52,7 +51,6 @@ resource "aws_s3_bucket_public_access_block" "data_lake" {
   restrict_public_buckets = true
 }
 
-# Versioning — enables replay and recovery of raw source files
 resource "aws_s3_bucket_versioning" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
   versioning_configuration {
@@ -60,9 +58,8 @@ resource "aws_s3_bucket_versioning" "data_lake" {
   }
 }
 
-# Prefix placeholder objects — S3 has no real "folders";
-# zero-byte objects with a trailing slash simulate the structure
-# so the console and Glue Crawlers see the expected layout.
+# S3 has no real folders — zero-byte objects simulate the prefix
+# structure so the console and Glue Crawlers see the expected layout.
 locals {
   s3_prefixes = [
     "dev/raw/",
@@ -85,9 +82,17 @@ resource "aws_s3_object" "prefixes" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# IAM — Shared trust policy (allows role assumption by IAM users
-# within this account). Each role gets the same trust document —
-# what differs is the *permission* policies attached below.
+# IAM — Trust Policies
+#
+# assume_role_base      shared by ae, junior_de, readonly
+#                       IAM principals in this account only
+#
+# assume_role_admin     admin only, MFA required
+#
+# assume_role_senior_de senior_de only
+#                       IAM principals + glue.amazonaws.com
+#                       Glue must assume this role to run crawlers
+#                       and ETL jobs — without it you get a service error
 # ─────────────────────────────────────────────────────────────────
 
 data "aws_iam_policy_document" "assume_role_base" {
@@ -102,8 +107,6 @@ data "aws_iam_policy_document" "assume_role_base" {
   }
 }
 
-# Admin trust policy — same base but with an MFA condition.
-# Without MFA the AssumeRole call is denied even for admins.
 data "aws_iam_policy_document" "assume_role_admin" {
   statement {
     effect  = "Allow"
@@ -122,14 +125,33 @@ data "aws_iam_policy_document" "assume_role_admin" {
   }
 }
 
+data "aws_iam_policy_document" "assume_role_senior_de" {
+  # IAM principals (you, Airflow on EC2) can assume this role
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  # Glue service assumes this role when running crawlers and ETL jobs
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["glue.amazonaws.com"]
+    }
+  }
+}
+
 # ─────────────────────────────────────────────────────────────────
-# ROLE 1 — olist-admin-role
-# Who:    You, the developer, during infrastructure work only
-# Trust:  Any IAM principal in this account — BUT only if MFA is active
-# Perms:  AdministratorAccess (AWS managed policy — full access)
-# Why:    Root user is never used after day 1. This role is your
-#         emergency hatch. MFA condition means a stolen key alone
-#         cannot assume it.
+# IAM — Role 1: Admin
+# Full AdministratorAccess, MFA required to assume
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "admin" {
@@ -145,23 +167,19 @@ resource "aws_iam_role_policy_attachment" "admin_full" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 2 — olist-senior-de-role
-# Who:    The pipeline builder — Glue jobs, Airflow on EC2, Lambda
-# Trust:  IAM principals in this account (no MFA required for
-#         automation — Airflow/Lambda can't prompt for MFA)
-# Perms:  S3 full + Glue full + Redshift full + Lambda invoke +
-#         CloudWatch logs (for DAG failure alarms)
+# IAM — Role 2: Senior DE
+# S3 full + Glue full + Redshift full + Lambda invoke + CloudWatch
+# Trusted by glue.amazonaws.com so Glue can assume it for jobs
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "senior_de" {
   name               = "${var.project_name}-senior-de-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_base.json
+  assume_role_policy = data.aws_iam_policy_document.assume_role_senior_de.json
 
   tags = { Role = "senior-de" }
 }
 
 data "aws_iam_policy_document" "senior_de_perms" {
-  # Full S3 access on the project bucket only
   statement {
     sid     = "S3FullProjectBucket"
     effect  = "Allow"
@@ -172,7 +190,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     ]
   }
 
-  # Full Glue — create/run crawlers, ETL jobs, manage Data Catalog
   statement {
     sid       = "GlueFull"
     effect    = "Allow"
@@ -180,7 +197,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["*"]
   }
 
-  # Full Redshift — create schemas, run COPY, manage workgroups
   statement {
     sid       = "RedshiftFull"
     effect    = "Allow"
@@ -188,7 +204,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["*"]
   }
 
-  # Lambda invoke only — senior DE triggers functions but does not manage them
   statement {
     sid       = "LambdaInvoke"
     effect    = "Allow"
@@ -196,7 +211,6 @@ data "aws_iam_policy_document" "senior_de_perms" {
     resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-*"]
   }
 
-  # CloudWatch — write logs, create alarms, describe metrics
   statement {
     sid    = "CloudWatchLogs"
     effect = "Allow"
@@ -220,12 +234,9 @@ resource "aws_iam_role_policy" "senior_de" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 3 — olist-ae-role  (Analytics Engineer / dbt)
-# Who:    dbt running transformations in Redshift
-# Trust:  IAM principals in this account (dbt runs in Docker/CI)
-# Perms:  Redshift read/write on staging, intermediate, marts schemas
-#         S3 read on processed/ (dbt may reference external stages)
-#         No Glue, no Lambda, no raw schema access
+# IAM — Role 3: AE (Analytics Engineer / dbt)
+# Redshift read/write on staging + intermediate + marts
+# S3 read on processed/ only
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "ae" {
@@ -236,9 +247,6 @@ resource "aws_iam_role" "ae" {
 }
 
 data "aws_iam_policy_document" "ae_perms" {
-  # Redshift — connect, run queries, manage tables in staging/intermediate/marts
-  # Note: Redshift schema-level permissions are enforced inside the DB (via GRANT),
-  # not via IAM. This IAM policy grants the ability to connect and use the API.
   statement {
     sid    = "RedshiftConnect"
     effect = "Allow"
@@ -255,7 +263,6 @@ data "aws_iam_policy_document" "ae_perms" {
     resources = ["*"]
   }
 
-  # S3 read on processed/ — dbt may query external tables backed by S3 Parquet
   statement {
     sid     = "S3ReadProcessed"
     effect  = "Allow"
@@ -275,12 +282,8 @@ resource "aws_iam_role_policy" "ae" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 4 — olist-junior-de-role
-# Who:    A junior who can inspect the pipeline but not modify it
-# Trust:  IAM principals in this account
-# Perms:  S3 read (dev prefix only) + Glue read (no create/delete)
-#         + Redshift connect (raw schema — enforced in DB via GRANT)
-#         Cannot write to S3, cannot modify Glue jobs, cannot touch prod
+# IAM — Role 4: Junior DE
+# S3 read on dev/ only + Glue read-only + Redshift read on raw schema
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "junior_de" {
@@ -291,7 +294,6 @@ resource "aws_iam_role" "junior_de" {
 }
 
 data "aws_iam_policy_document" "junior_de_perms" {
-  # S3 read — dev prefix only; cannot see prod data
   statement {
     sid     = "S3ReadDev"
     effect  = "Allow"
@@ -302,7 +304,6 @@ data "aws_iam_policy_document" "junior_de_perms" {
     ]
   }
 
-  # Glue read-only — can inspect jobs and catalog, cannot run or modify
   statement {
     sid    = "GlueReadOnly"
     effect = "Allow"
@@ -323,7 +324,6 @@ data "aws_iam_policy_document" "junior_de_perms" {
     resources = ["*"]
   }
 
-  # Redshift connect — raw schema access enforced via GRANT inside Redshift
   statement {
     sid    = "RedshiftReadRaw"
     effect = "Allow"
@@ -347,12 +347,9 @@ resource "aws_iam_role_policy" "junior_de" {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# ROLE 5 — olist-readonly-role
-# Who:    Data analysts, sales team, Streamlit dashboard queries
-# Trust:  IAM principals in this account
-# Perms:  Redshift connect only — analytics schema read enforced via
-#         GRANT inside Redshift. Zero S3, zero Glue, zero Lambda.
-#         Cannot see raw data, pipeline config, or prod infrastructure.
+# IAM — Role 5: Read-only (DA / Sales)
+# Redshift read-only on analytics schema only
+# Zero access to raw data or pipeline infrastructure
 # ─────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "readonly" {
@@ -363,7 +360,6 @@ resource "aws_iam_role" "readonly" {
 }
 
 data "aws_iam_policy_document" "readonly_perms" {
-  # Redshift connect — analytics schema read enforced inside the DB
   statement {
     sid    = "RedshiftReadAnalytics"
     effect = "Allow"
@@ -384,4 +380,91 @@ resource "aws_iam_role_policy" "readonly" {
   name   = "${var.project_name}-readonly-policy"
   role   = aws_iam_role.readonly.id
   policy = data.aws_iam_policy_document.readonly_perms.json
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Glue — Data Catalog Database
+# Metadata namespace for raw Olist CSV schemas.
+# NOT a Redshift database — no data is stored here,
+# only schema definitions discovered by the crawler.
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_glue_catalog_database" "dev_raw" {
+  name        = "olist_dev_raw"
+  description = "Schema metadata for raw Olist CSVs in dev/raw/"
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Glue — Crawler
+# Crawls dev/raw/, infers schemas from the 9 Olist CSVs, and
+# registers them as tables in olist_dev_raw above.
+# Schedule omitted — on-demand, triggered manually or by Airflow.
+# MergeNewColumns prevents re-runs from wiping existing columns.
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_glue_crawler" "dev_raw" {
+  name          = "${var.project_name}-dev-raw-crawler"
+  database_name = aws_glue_catalog_database.dev_raw.name
+  role          = aws_iam_role.senior_de.arn
+  description   = "Crawls dev/raw/ CSVs and registers schemas in the Glue Data Catalog"
+
+  s3_target {
+    path = "s3://${var.bucket_name}/dev/raw/"
+  }
+
+  configuration = jsonencode({
+    Version = 1.0
+    CrawlerOutput = {
+      Tables = { AddOrUpdateBehavior = "MergeNewColumns" }
+    }
+  })
+
+  tags = { Role = "senior-de" }
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Glue — ETL Job: csv_to_parquet (Feature 1.4)
+#
+# Reads all 9 raw CSV tables from the Data Catalog and writes them
+# to dev/processed/ as Snappy-compressed Parquet. Date-partitioned
+# tables (orders, reviews) get year/month folder structure for
+# Athena partition pruning.
+#
+# extra-py-files: the four helper modules main.py imports at runtime.
+# Glue adds these to the Python path so local imports resolve.
+# Without this, Glue only sees main.py and throws ModuleNotFoundError.
+#
+# G.1X / 2 workers: sufficient for 100K-row Olist dataset.
+# Scale number_of_workers for larger datasets in future epics.
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_glue_job" "csv_to_parquet" {
+  name        = "${var.project_name}-csv-to-parquet"
+  role_arn    = aws_iam_role.senior_de.arn
+  description = "Converts raw Olist CSVs to Snappy Parquet in dev/processed/"
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/main.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--extra-py-files" = join(",", [
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/config.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/readers.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/transformers.py",
+      "s3://${var.bucket_name}/dev/glue-scripts/csv_to_parquet/writers.py",
+    ])
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-glue-datacatalog"          = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-metrics"                   = "true"
+  }
+
+  glue_version      = "4.0"
+  number_of_workers = 2
+  worker_type       = "G.1X"
+
+  tags = { Role = "senior-de" }
 }
