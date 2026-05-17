@@ -58,3 +58,4 @@ docs
 #Claude
 .claudeignore
 CLAUDE.mdterraform.tfvars
+terraform.tfvars
