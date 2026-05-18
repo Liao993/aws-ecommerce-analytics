@@ -16,6 +16,16 @@ SOURCE_CATALOG_TABLE    = "olist_orders_dataset_csv_processed"
 TARGET_SCHEMA  = "dev_raw"
 TARGET_TABLE   = "olist_orders"
 FULL_TABLE_REF = f"{TARGET_SCHEMA}.{TARGET_TABLE}"
+TARGET_COLUMNS = [
+    "order_id",
+    "customer_id",
+    "order_status",
+    "order_purchase_timestamp",
+    "order_approved_at",
+    "order_delivered_carrier_date",
+    "order_delivered_customer_date",
+    "order_estimated_delivery_date",
+]
 
 # ── Runtime parameter keys ────────────────────────────────────────
 # These match the --KEY names in the Glue job default_arguments.
@@ -27,8 +37,6 @@ PARAM_REDSHIFT_TMP_DIR  = "REDSHIFT_TMP_DIR"
 PARAM_REDSHIFT_S3_ROLE_ARN = "REDSHIFT_S3_ROLE_ARN"
 
 # ── DDL ───────────────────────────────────────────────────────────
-# PREACTIONS: runs before the COPY command.
-# Creates schema + table if they don't exist. Safe to re-run.
 PREACTIONS_DDL = f"""
 CREATE SCHEMA IF NOT EXISTS {TARGET_SCHEMA};
 
@@ -48,17 +56,22 @@ DISTSTYLE AUTO
 SORTKEY (order_purchase_timestamp);
 """
 
-POSTACTIONS_DDL = ""    # ← empty, DROP TABLE in preactions handles cleanup
-
-# POSTACTIONS: runs after new data is fully staged in S3 tmp,
-# before the COPY commits to Redshift.
-# TRUNCATE removes the previous full load atomically.
-POSTACTIONS_DDL = f"TRUNCATE TABLE {TARGET_SCHEMA}.{TARGET_TABLE};"
+POSTACTIONS_DDL = ""    # empty, DROP TABLE in preactions handles cleanup
 
 # ── Column cleanup ────────────────────────────────────────────────
 # Partition routing columns added by csv_to_parquet for Athena pruning.
 # Not business columns — must be dropped before Redshift load.
 PARTITION_HELPER_COLUMNS = ["partition_year", "partition_month"]
+
+# Redshift DDL expects these fields as TIMESTAMP. The upstream CSV crawler
+# usually catalogs them as strings, so cast them before the Redshift COPY.
+TIMESTAMP_COLUMNS = [
+    "order_purchase_timestamp",
+    "order_approved_at",
+    "order_delivered_carrier_date",
+    "order_delivered_customer_date",
+    "order_estimated_delivery_date",
+]
 
 # ── JDBC ──────────────────────────────────────────────────────────
 REDSHIFT_JDBC_DRIVER = "com.amazon.redshift.jdbc42.Driver"

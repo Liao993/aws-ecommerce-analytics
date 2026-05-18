@@ -34,12 +34,19 @@ from awsglue.job import Job
 from pyspark.context import SparkContext
 
 from readers import read_catalog_table
-from writers import drop_partition_helper_columns, write_to_redshift
+from writers import (
+    cast_timestamp_columns,
+    drop_partition_helper_columns,
+    normalize_choice_type_columns,
+    select_target_columns,
+    write_to_redshift,
+)
 from validators import validate_redshift_row_count
 from config import (
     SOURCE_CATALOG_DATABASE,
     SOURCE_CATALOG_TABLE,
     FULL_TABLE_REF,
+    TARGET_COLUMNS,
     PARAM_REDSHIFT_URL,
     PARAM_REDSHIFT_USER,
     PARAM_REDSHIFT_PASSWORD,
@@ -47,6 +54,7 @@ from config import (
     PREACTIONS_DDL,
     POSTACTIONS_DDL,
     PARTITION_HELPER_COLUMNS,
+    TIMESTAMP_COLUMNS,
     REDSHIFT_JDBC_DRIVER,
     PARAM_REDSHIFT_S3_ROLE_ARN,
 )
@@ -81,7 +89,7 @@ redshift_url      = args[PARAM_REDSHIFT_URL]
 redshift_user     = args[PARAM_REDSHIFT_USER]
 redshift_password = args[PARAM_REDSHIFT_PASSWORD]
 redshift_tmp_dir  = args[PARAM_REDSHIFT_TMP_DIR]
-redshift_s3_role_arn = args[PARAM_REDSHIFT_S3_ROLE_ARN] 
+redshift_s3_role_arn = args[PARAM_REDSHIFT_S3_ROLE_ARN]
 # ─────────────────────────────────────────────────────────────────
 # Pipeline — 5 steps
 # ─────────────────────────────────────────────────────────────────
@@ -98,14 +106,34 @@ if __name__ == "__main__":
     source_row_count = dyf.count()
     logger.info(f"Source row count (Parquet): {source_row_count:,}")
 
-    # Step 2 — Drop partition helper columns (partition_year, partition_month)
+    # Step 2 — Normalize Glue ChoiceType helper column names
+    dyf = normalize_choice_type_columns(
+        glue_context = glueContext,
+        dyf          = dyf,
+    )
+
+    # Step 3 — Drop partition helper columns (partition_year, partition_month)
     dyf = drop_partition_helper_columns(
         glue_context    = glueContext,
         dyf             = dyf,
         columns_to_drop = PARTITION_HELPER_COLUMNS,
     )
 
-    # Step 3 — Write to Redshift via direct JDBC COPY
+    # Step 4 — Match Spark types to the Redshift target DDL
+    dyf = cast_timestamp_columns(
+        glue_context      = glueContext,
+        dyf               = dyf,
+        timestamp_columns = TIMESTAMP_COLUMNS,
+    )
+
+    # Step 5 — Keep only columns declared in the Redshift target table
+    dyf = select_target_columns(
+        glue_context   = glueContext,
+        dyf            = dyf,
+        target_columns = TARGET_COLUMNS,
+    )
+
+    # Step 6 — Write to Redshift via direct JDBC COPY
     # No Glue connection object used — writers.py connects directly
     # using the JDBC URL injected from Glue job parameters.
     write_to_redshift(
@@ -121,7 +149,7 @@ if __name__ == "__main__":
         redshift_s3_role_arn = redshift_s3_role_arn,
     )
 
-    # Step 4 — Post-load validation
+    # Step 7 — Post-load validation
     validate_redshift_row_count(
         spark             = spark,
         full_table_ref    = FULL_TABLE_REF,
@@ -132,6 +160,6 @@ if __name__ == "__main__":
         jdbc_driver       = REDSHIFT_JDBC_DRIVER,
     )
 
-    # Step 5 — Commit job bookmark
+    # Step 8 — Commit job bookmark
     job.commit()
     logger.info("Job committed ✓")

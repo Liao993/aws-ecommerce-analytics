@@ -241,6 +241,7 @@ data "aws_iam_policy_document" "senior_de_perms" {
       "logs:PutLogEvents",
       "logs:DescribeLogGroups",
       "cloudwatch:PutMetricAlarm",
+      "cloudwatch:PutMetricData",
       "cloudwatch:DescribeAlarms",
       "cloudwatch:GetMetricData",
     ]
@@ -495,11 +496,11 @@ resource "aws_glue_job" "csv_to_parquet" {
 # No Glue connection object needed — Redshift is publicly accessible.
 # ─────────────────────────────────────────────────────────────────
 
+
 resource "aws_glue_job" "load_to_redshift" {
   name        = "${var.project_name}-load-to-redshift"
   role_arn    = aws_iam_role.senior_de.arn
   description = "Loads olist_orders Parquet from S3 into Redshift dev_raw schema"
-
   command {
     name            = "glueetl"
     script_location = "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/main.py"
