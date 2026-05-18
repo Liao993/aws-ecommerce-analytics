@@ -15,3 +15,14 @@ variable "project_name" {
   type        = string
   default     = "olist"
 }
+
+variable "redshift_password" {
+  description = "Redshift admin password"
+  type        = string
+  sensitive   = true
+}
+
+output "redshift_s3_role_arn" {
+  value       = aws_iam_role.redshift_s3.arn
+  description = "Attach this role to Redshift Serverless namespace for COPY access"
+}
