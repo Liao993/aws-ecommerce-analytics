@@ -16,7 +16,7 @@ TARGET_S3_PREFIX = "s3://olist-ecommerce-tara888/dev/processed"
 # Athena and downstream Glue jobs can skip irrelevant months at query time.
 # Dimension tables (sellers, products, etc.) are small and written flat.
 PARTITIONED_TABLES: dict[str, str] = {
-    "olist_orders_datase_csv":        "order_purchase_timestamp",
+    "olist_orders_dataset_csv":        "order_purchase_timestamp",
     "olist_order_reviews_dataset_csv": "review_creation_date",
 }
 

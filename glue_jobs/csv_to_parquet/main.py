@@ -18,6 +18,7 @@ Shared helpers:
                                    TARGET_S3_PREFIX
 """
 
+import signal
 import sys
 import logging
 
@@ -73,7 +74,7 @@ def process_table(table_name: str) -> None:
     dyf = read_catalog_table(glueContext, SOURCE_DATABASE, table_name)
 
     # Step 2 — Resolve and clean
-    dyf = resolve_and_clean(dyf, table_name)
+    dyf = resolve_and_clean(dyf, table_name, glueContext)
 
     # Step 3 — Partition columns (date-partitioned tables only)
     if table_name in PARTITIONED_TABLES:

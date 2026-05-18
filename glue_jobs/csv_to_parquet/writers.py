@@ -39,7 +39,10 @@ def write_parquet(
         f"Writing {table_name} → {target_path} | "
         f"partitions: {partition_keys or 'none'}"
     )
- 
+    # Processed tables go into a dedicated catalog database — not the
+    # raw source database — so schema conflicts can never occur between
+    # raw and processed entries sharing the same namespace.
+    processed_database = source_database.replace("_raw", "_processed")
     sink = glue_context.getSink(
         connection_type     = "s3",
         path                = target_path,
@@ -50,7 +53,7 @@ def write_parquet(
     )
     sink.setFormat("glueparquet", compression="snappy")
     sink.setCatalogInfo(
-        catalogDatabase  = source_database,
+        catalogDatabase  = processed_database,
         catalogTableName = f"{table_name}_processed",
     )
     sink.writeFrame(dyf)
