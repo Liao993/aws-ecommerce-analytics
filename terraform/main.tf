@@ -519,6 +519,7 @@ resource "aws_glue_job" "load_to_redshift" {
     "--REDSHIFT_PASSWORD" = var.redshift_password
     "--REDSHIFT_TMP_DIR"  = "s3://${var.bucket_name}/dev/tmp/"
     "--REDSHIFT_S3_ROLE_ARN" = aws_iam_role.redshift_s3.arn  
+    
     "--job-bookmark-option"              = "job-bookmark-disable"
     "--enable-glue-datacatalog"          = "true"
     "--enable-continuous-cloudwatch-log" = "true"
