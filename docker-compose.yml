@@ -13,6 +13,7 @@ services:
     working_dir: /usr/app/dbt
     volumes:
       - ./dbt_project:/usr/app/dbt
+      - ~/.dbt:/root/.dbt        # ← mount your local profiles.yml into the container
     env_file:
       - .env
     command: [ "tail", "-f", "/dev/null" ] # keeps container alive for exec commands

@@ -1,0 +1,35 @@
+name: olist_ecommerce
+version: "1.0.0"
+config-version: 2
+
+# This is the profile name dbt looks up in ~/.dbt/profiles.yml
+profile: olist_ecommerce
+
+# ── Directory layout ──────────────────────────────────────────────
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"       # compiled SQL goes here — gitignored
+clean-targets: ["target", "dbt_packages"]
+
+# ── Materializations by layer ─────────────────────────────────────
+# The key principle: staging and intermediate are views (no storage cost,
+# always fresh), marts are tables (fast for Streamlit and analysts to query).
+models:
+  olist_ecommerce:
+
+    staging:
+      +materialized: view
+      +schema: staging          # resolves to dev_staging in dev, staging in prod
+
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+
+    marts:
+      +materialized: table
+      +schema: marts
