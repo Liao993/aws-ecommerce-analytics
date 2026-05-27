@@ -136,7 +136,7 @@ jobs:
 
       - name: Install dbt packages
         working-directory: ${{ env.DBT_PROJECT_DIR }}
-        run: dbt deps
+        run: dbt deps --project-dir .
 
       # ───────────────────────────────────────────────────────────
       # 7. dbt compile
@@ -148,7 +148,7 @@ jobs:
 
       - name: dbt compile
         working-directory: ${{ env.DBT_PROJECT_DIR }}
-        run: dbt compile --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
+        run: dbt compile --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
 
       # ───────────────────────────────────────────────────────────
       # 8. dbt test — stg_orders only
@@ -162,7 +162,7 @@ jobs:
 
       - name: dbt test (stg_orders)
         working-directory: ${{ env.DBT_PROJECT_DIR }}
-        run: dbt test --select stg_orders --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
+        run: dbt test --select stg_orders --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
 
       # ───────────────────────────────────────────────────────────
       # 9. Post — clean up profiles.yml
