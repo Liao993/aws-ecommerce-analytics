@@ -1,0 +1,176 @@
+name: dbt CI
+
+# ─────────────────────────────────────────────────────────────────
+# Trigger — runs on every pull request targeting develop.
+# Does NOT run on push to develop or on PRs to main.
+# This gate must pass before a branch can be merged.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches:
+      - develop
+
+# Cancel any in-progress run for the same PR if a new commit is pushed.
+# Prevents queue buildup when you push fixes mid-review.
+concurrency:
+  group: dbt-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dbt-ci:
+    name: dbt compile + test
+    runs-on: ubuntu-latest
+
+    # ─────────────────────────────────────────────────────────────
+    # Environment variables vs GitHub Secrets — key distinction:
+    #
+    # GitHub Secrets (${{ secrets.NAME }}) are encrypted at rest
+    # in GitHub and are NEVER printed in logs — GitHub masks them
+    # automatically. They are the right place for credentials:
+    # passwords, host URLs, API keys. You set them once in the
+    # repo UI and reference them here.
+    #
+    # Environment variables (env: block) are plain key-value pairs
+    # that ARE visible in the workflow YAML and in the runner's
+    # process environment. Use them for non-sensitive config:
+    # region, schema names, project names. You can combine both —
+    # inject a Secret into an env var to give it a cleaner name
+    # inside run: steps, but the value stays masked in logs.
+    #
+    # Rule: if it's a credential → secrets.*
+    #       if it's config/non-sensitive → env: block directly
+    # ─────────────────────────────────────────────────────────────
+
+    env:
+      DBT_PROJECT_DIR: dbt_project        # path to dbt_project.yml inside the repo
+      DBT_PROFILES_DIR: /tmp/dbt_profiles # written inline in the setup step below
+      DBT_TARGET: ci                      # matches the target name in profiles.yml
+
+    steps:
+
+      # ───────────────────────────────────────────────────────────
+      # 1. Checkout
+      # ───────────────────────────────────────────────────────────
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ───────────────────────────────────────────────────────────
+      # 2. Python setup
+      # ───────────────────────────────────────────────────────────
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ───────────────────────────────────────────────────────────
+      # 3. Cache pip dependencies
+      # Hashes requirements so the cache is invalidated only when
+      # package versions change — not on every commit.
+      # ───────────────────────────────────────────────────────────
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('dbt_project/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ───────────────────────────────────────────────────────────
+      # 4. Install dbt
+      # ───────────────────────────────────────────────────────────
+
+      - name: Install dbt-core and dbt-redshift
+        run: |
+          pip install --upgrade pip
+          pip install dbt-core==1.8.* dbt-redshift==1.8.*
+          dbt --version
+
+      # ───────────────────────────────────────────────────────────
+      # 5. Write profiles.yml inline
+      #
+      # profiles.yml is NEVER committed to the repo — it contains
+      # the Redshift host and credentials. Instead we write it at
+      # runtime to a temp directory ($DBT_PROFILES_DIR) that only
+      # exists for the life of this runner.
+      #
+      # ${{ secrets.NAME }} pulls from GitHub Secrets (encrypted).
+      # The values are masked in logs — GitHub replaces them with ***.
+      #
+      # The heredoc (cat << EOF) writes the file in one shell step.
+      # Indentation matters in YAML profiles — keep the two-space
+      # indent inside the heredoc exactly as shown.
+      # ───────────────────────────────────────────────────────────
+
+      - name: Write dbt profiles.yml
+        run: |
+          mkdir -p $DBT_PROFILES_DIR
+          cat << EOF > $DBT_PROFILES_DIR/profiles.yml
+          olist_ecommerce:
+            target: ${{ env.DBT_TARGET }}
+            outputs:
+              ci:
+                type: redshift
+                method: database
+                host: ${{ secrets.REDSHIFT_HOST }}
+                port: 5439
+                user: ${{ secrets.REDSHIFT_USER }}
+                password: ${{ secrets.REDSHIFT_PASSWORD }}
+                dbname: ${{ secrets.REDSHIFT_DBNAME }}
+                schema: dev_staging
+                threads: 4
+                connect_timeout: 30
+                ra3_node: true
+          EOF
+
+      # ───────────────────────────────────────────────────────────
+      # 6. Install dbt packages
+      # Pulls packages listed in dbt_project/packages.yml
+      # (e.g. dbt_utils, dbt_expectations). Cached via pip step
+      # above but dbt_packages/ itself is gitignored so must be
+      # fetched fresh each run.
+      # ───────────────────────────────────────────────────────────
+
+      - name: Install dbt packages
+        working-directory: ${{ env.DBT_PROJECT_DIR }}
+        run: dbt deps --project-dir .
+
+      # ───────────────────────────────────────────────────────────
+      # 7. dbt compile
+      # Parses all SQL, resolves refs and sources, checks for
+      # syntax errors. Does NOT run against Redshift — pure local
+      # parse. Fast and free. Fails on broken ref(), missing models,
+      # or malformed Jinja.
+      # ───────────────────────────────────────────────────────────
+
+      - name: dbt compile
+        working-directory: ${{ env.DBT_PROJECT_DIR }}
+        run: dbt compile --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
+
+      # ───────────────────────────────────────────────────────────
+      # 8. dbt test — stg_orders only
+      # Runs the schema tests defined in stg_orders.yml:
+      # not_null, unique, accepted_values. Hits Redshift for real
+      # but only touches the dev_staging schema. Uses the ci target
+      # defined in profiles.yml above.
+      # Scoped to stg_orders for Epic 1 — expand to `staging` once
+      # all 8 staging models are built in Epic 3.
+      # ───────────────────────────────────────────────────────────
+
+      - name: dbt test (stg_orders)
+        working-directory: ${{ env.DBT_PROJECT_DIR }}
+        run: dbt test --select stg_orders --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
+
+      # ───────────────────────────────────────────────────────────
+      # 9. Post — clean up profiles.yml
+      # Defensive step: wipe the credentials file from the runner
+      # even though GitHub destroys the entire VM after the job.
+      # Signals intent in code reviews that secrets are treated carefully.
+      # ───────────────────────────────────────────────────────────
+
+      - name: Clean up profiles.yml
+        if: always()    # runs even if previous steps failed
+        run: rm -f $DBT_PROFILES_DIR/profiles.yml
