@@ -511,6 +511,7 @@ resource "aws_glue_job" "load_to_redshift" {
     "--extra-py-files" = join(",", [
       "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/config.py",
       "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/readers.py",
+       "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/transformers.py",
       "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/writers.py",
       "s3://${var.bucket_name}/dev/glue-scripts/load_to_redshift/validators.py",
     ])
@@ -525,12 +526,13 @@ resource "aws_glue_job" "load_to_redshift" {
     "--enable-glue-datacatalog"          = "true"
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-metrics"                   = "true"
+    "--execution-class"                  = "FLEX" 
   }
 
   glue_version      = "4.0"
   number_of_workers = 2
   worker_type       = "G.1X"
-  timeout           = 20
+  timeout           = 30
 
   tags = { Role = "senior-de" }
 }
