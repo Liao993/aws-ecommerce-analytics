@@ -1,5 +1,7 @@
 import logging
+# pyrefly: ignore [missing-import]
 from awsglue.context import GlueContext
+# pyrefly: ignore [missing-import]
 from awsglue.dynamicframe import DynamicFrame
 
 logger = logging.getLogger(__name__)
@@ -13,29 +15,20 @@ def read_catalog_table(
     """
     Read a processed Parquet table from the Glue Data Catalog into memory.
 
-    In this job the catalog table being read is olist_orders_dataset_processed —
-    the entry that csv_to_parquet/main.py created via getSink(enableUpdateCatalog=True).
-    The catalog entry points at dev/processed/olist_orders_dataset/ Parquet files.
-
-    Same two-step mechanism as csv_to_parquet/readers.py:
-        Step 1 → catalog lookup: where is the file? what are the columns?
-        Step 2 → S3 read: actual Parquet bytes loaded into Spark memory
-
-    Why read Parquet via the catalog instead of raw S3 path:
-        The catalog entry already has the correct schema, partition info,
-        and S3 location. Reading via catalog means this job stays in sync
-        with whatever csv_to_parquet wrote — no hardcoded S3 paths here.
+    The catalog entry (written by csv_to_parquet via getSink(enableUpdateCatalog=True))
+    already carries schema, partition info, and S3 location. Reading via catalog
+    keeps this job in sync with whatever csv_to_parquet wrote — no hardcoded S3 paths.
 
     Args:
         glue_context: Active GlueContext from the job bootstrap.
-        database:     Glue catalog database (e.g. "olist_dev_raw").
-        table_name:   Processed catalog table (e.g. "olist_orders_dataset_processed").
+        database:     Glue catalog database (e.g. "olist_dev_processed").
+        table_name:   Processed catalog table (e.g. "olist_orders_dataset_csv_processed").
 
     Returns:
         DynamicFrame with all Parquet rows loaded into Spark memory.
 
     Raises:
-        RuntimeError: Zero rows — csv_to_parquet likely did not run
+        RuntimeError: Zero rows returned — csv_to_parquet likely did not run
                       or the Parquet files are missing from S3.
     """
     logger.info(f"Reading processed Parquet: {database}.{table_name}")
