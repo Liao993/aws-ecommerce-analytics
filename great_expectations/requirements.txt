@@ -1,0 +1,23 @@
+# great_expectations/requirements.txt
+# Dependencies for the GX data quality runner only.
+# Installed into the olist_gx Docker image via Dockerfile.gx.
+# Kept separate from dashboards/requirements.txt (Streamlit deps)
+# and dbt_project/ (dbt deps) — each service owns its own requirements.
+
+# ── Great Expectations ────────────────────────────────────────────
+# Pinned to 0.18.x — the fluent datasource API used in checkpoint.py
+# (context.sources.add_pandas) does not exist in GX 1.x.
+# Do not upgrade without rewriting checkpoint.py.
+great-expectations==0.18.*
+
+# ── Data I/O ──────────────────────────────────────────────────────
+pandas>=2.1.0
+pyarrow>=14.0.0       # required by pd.read_parquet for S3 URIs
+fsspec>=2023.6.0      # pandas S3 URI resolution — pd.read_parquet("s3://...") needs this
+s3fs>=2023.6.0        # fsspec S3 backend — translates s3:// paths to boto3 API calls
+
+# ── AWS ───────────────────────────────────────────────────────────
+boto3>=1.34.0         # S3 uploads in docs.py and failures.py
+
+# ── Config ────────────────────────────────────────────────────────
+python-dotenv>=1.0.0  # load .env credentials in gx_runner.py

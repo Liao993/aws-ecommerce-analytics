@@ -1,5 +1,16 @@
 version: "3.9"
 
+# ─────────────────────────────────────────────────────────────────
+# Named network — all services join olist_network so they can reach
+# each other by container name (e.g. Airflow calling olist_gx).
+# Without a named network, Docker Compose creates an anonymous one
+# per project that works for up/exec but breaks cross-compose wiring
+# needed in Feature 2.3 (Airflow) and Feature 2.4 (Lambda testing).
+# ─────────────────────────────────────────────────────────────────
+networks:
+  olist_network:
+    driver: bridge
+
 services:
 
   # ─────────────────────────────────────────────
@@ -13,10 +24,37 @@ services:
     working_dir: /usr/app/dbt
     volumes:
       - ./dbt_project:/usr/app/dbt
-      - ~/.dbt:/root/.dbt        # ← mount your local profiles.yml into the container
+      - ~/.dbt:/root/.dbt        # mount your local profiles.yml into the container
     env_file:
       - .env
-    command: [ "tail", "-f", "/dev/null" ] # keeps container alive for exec commands
+    networks:
+      - olist_network
+    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands
+
+  # ─────────────────────────────────────────────
+  # gx — Great Expectations data quality layer
+  #
+  # HOW TO RUN:
+  #   docker compose exec gx python gx_runner.py --table olist_orders
+  #   docker compose exec gx python gx_runner.py --table olist_order_reviews
+  #   docker compose exec gx python gx_runner.py --table olist_order_items
+  #
+  # The great_expectations/ folder is mounted at /app/gx so any local
+  # edit to a suite file is reflected immediately without rebuilding.
+  # ─────────────────────────────────────────────
+  gx:
+    build:
+      context: .
+      dockerfile: Dockerfile.gx
+    container_name: olist_gx
+    working_dir: /app/gx
+    volumes:
+      - ./great_expectations:/app/gx   # live-mount — edits reflect instantly
+    env_file:
+      - .env
+    networks:
+      - olist_network
+    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands
 
   # ─────────────────────────────────────────────
   # streamlit — dashboard layer
@@ -32,20 +70,34 @@ services:
       - "8503:8501"
     env_file:
       - .env
+    networks:
+      - olist_network
     command: [ "streamlit", "run", "app.py", "--server.address=0.0.0.0" ]
 
   # ─────────────────────────────────────────────
   # terraform — IaC layer
+  #
+  # IMPORTANT — use exec, not run:
+  #   CORRECT:   docker compose exec terraform init
+  #   CORRECT:   docker compose exec terraform plan
+  #   CORRECT:   docker compose exec terraform apply
+  #   WRONG:     docker compose run terraform apply  ← spawns a new container every time
+  #
+  # The container stays alive via tail -f /dev/null. exec reuses it.
+  # run always creates a fresh container and leaves orphans behind.
   # ─────────────────────────────────────────────
   terraform:
     build:
       context: .
       dockerfile: Dockerfile.terraform
     container_name: olist_terraform
+    working_dir: /workspace
     volumes:
       - ./terraform:/workspace
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-    command: [ "tail", "-f", "/dev/null" ] # keeps container alive for exec commands
+    networks:
+      - olist_network
+    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands

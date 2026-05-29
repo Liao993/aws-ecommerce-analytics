@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+# System deps — curl for healthchecks, no build tools needed (pure Python stack)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/gx
+
+# Copy requirements first — layer caching means pip only re-runs when this changes.
+# This file lives at great_expectations/requirements.txt in the repo root.
+COPY great_expectations/requirements.txt ./requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Confirm GX installed at the right version
+RUN python -c "import great_expectations as gx; print('GX version:', gx.__version__)"
+
+# Container stays alive for docker compose exec commands.
+# Airflow's BashOperator will call:
+#   docker compose exec gx python gx_runner.py --table olist_orders
+CMD ["tail", "-f", "/dev/null"]
