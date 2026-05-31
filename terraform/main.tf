@@ -529,9 +529,13 @@ resource "aws_glue_job" "load_to_redshift" {
     "--execution-class"                  = "FLEX" 
   }
 
+
   glue_version      = "4.0"
   number_of_workers = 2
   worker_type       = "G.1X"
+  execution_property {
+    max_concurrent_runs = 1    # ← add this block
+  }
   timeout           = 30
 
   tags = { Role = "senior-de" }

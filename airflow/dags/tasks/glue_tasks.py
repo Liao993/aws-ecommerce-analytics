@@ -57,7 +57,7 @@ def make_crawler_task() -> GlueCrawlerOperator:
     """
     return GlueCrawlerOperator(
         task_id         = "trigger_glue_crawler",
-        crawler_name    = GLUE_CRAWLER_NAME,
+        config              = {"Name": GLUE_CRAWLER_NAME},
         aws_conn_id     = AWS_CONN_ID,
         region_name     = AWS_REGION,
         wait_for_completion = True,
