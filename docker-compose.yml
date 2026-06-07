@@ -1,21 +1,90 @@
 version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────
-# Named network — all services join olist_network so they can reach
-# each other by container name (e.g. Airflow calling olist_gx).
-# Without a named network, Docker Compose creates an anonymous one
-# per project that works for up/exec but breaks cross-compose wiring
-# needed in Feature 2.3 (Airflow) and Feature 2.4 (Lambda testing).
+# docker-compose.yml — Olist Analytics Platform
+#
+# All 8 services in one file. One network. One place to see
+# the full project. Start only what you need by naming the service.
+#
+# Common startup sequences (all run from repo root):
+#
+#   First-time Airflow setup (run once only):
+#     docker compose up airflow-init
+#
+#   Daily data work (dbt + GX + Streamlit):
+#     docker compose up -d dbt gx streamlit
+#
+#   Pipeline orchestration work:
+#     docker compose up -d airflow-webserver airflow-scheduler
+#
+#   Everything at once:
+#     docker compose up -d
+#
+#   Stop everything:
+#     docker compose down
+#
+#   Stop + wipe Airflow run history:
+#     docker compose down -v
+#
+# Services:
+#   dbt               → dbt Core + Redshift adapter  (exec only, no port)
+#   gx                → Great Expectations runner     (exec only, no port)
+#   streamlit         → Dashboard                     (port 8503)
+#   terraform         → IaC                           (exec only, no port)
+#   postgres          → Airflow metadata DB           (internal only)
+#   airflow-init      → One-shot DB setup             (exits on complete)
+#   airflow-webserver → Airflow UI                    (port 8080)
+#   airflow-scheduler → Task runner                   (no port)
 # ─────────────────────────────────────────────────────────────────
+
 networks:
   olist_network:
     driver: bridge
 
+# ── Airflow shared config (YAML anchor) ──────────────────────────
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    AIRFLOW_CONN_AWS_DEFAULT: "aws://?region_name=${AWS_DEFAULT_REGION}"
+
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - /var/run/docker.sock:/var/run/docker.sock
+    # requirements.txt stays in airflow/ (belongs to Airflow stack).
+    # Mounted here so airflow-init can pip install from it.
+    - ./airflow/requirements.txt:/requirements.txt
+
+  env_file:
+    - .env
+
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+  networks:
+    - olist_network
+
+# ─────────────────────────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────────────────────────
+
 services:
 
-  # ─────────────────────────────────────────────
-  # dbt — transformation layer
-  # ─────────────────────────────────────────────
+  # ── dbt — transformation layer ────────────────────────────────
+  # container_name must match DBT_CONTAINER_NAME in airflow/dags/config.py
   dbt:
     build:
       context: .
@@ -24,24 +93,18 @@ services:
     working_dir: /usr/app/dbt
     volumes:
       - ./dbt_project:/usr/app/dbt
-      - ~/.dbt:/root/.dbt        # mount your local profiles.yml into the container
+      - ~/.dbt:/root/.dbt
     env_file:
       - .env
     networks:
       - olist_network
-    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands
+    command: ["tail", "-f", "/dev/null"]
 
-  # ─────────────────────────────────────────────
-  # gx — Great Expectations data quality layer
-  #
+  # ── gx — Great Expectations data quality layer ────────────────
   # HOW TO RUN:
   #   docker compose exec gx python gx_runner.py --table olist_orders
   #   docker compose exec gx python gx_runner.py --table olist_order_reviews
   #   docker compose exec gx python gx_runner.py --table olist_order_items
-  #
-  # The great_expectations/ folder is mounted at /app/gx so any local
-  # edit to a suite file is reflected immediately without rebuilding.
-  # ─────────────────────────────────────────────
   gx:
     build:
       context: .
@@ -49,16 +112,14 @@ services:
     container_name: olist_gx
     working_dir: /app/gx
     volumes:
-      - ./great_expectations:/app/gx   # live-mount — edits reflect instantly
+      - ./great_expectations:/app/gx
     env_file:
       - .env
     networks:
       - olist_network
-    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands
+    command: ["tail", "-f", "/dev/null"]
 
-  # ─────────────────────────────────────────────
-  # streamlit — dashboard layer
-  # ─────────────────────────────────────────────
+  # ── streamlit — dashboard layer ───────────────────────────────
   streamlit:
     build:
       context: .
@@ -72,20 +133,13 @@ services:
       - .env
     networks:
       - olist_network
-    command: [ "streamlit", "run", "app.py", "--server.address=0.0.0.0" ]
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
 
-  # ─────────────────────────────────────────────
-  # terraform — IaC layer
-  #
-  # IMPORTANT — use exec, not run:
-  #   CORRECT:   docker compose exec terraform init
-  #   CORRECT:   docker compose exec terraform plan
-  #   CORRECT:   docker compose exec terraform apply
-  #   WRONG:     docker compose run terraform apply  ← spawns a new container every time
-  #
-  # The container stays alive via tail -f /dev/null. exec reuses it.
-  # run always creates a fresh container and leaves orphans behind.
-  # ─────────────────────────────────────────────
+  # ── terraform — IaC layer ─────────────────────────────────────
+  # Use exec, not run:
+  #   docker compose exec terraform init
+  #   docker compose exec terraform plan
+  #   docker compose exec terraform apply
   terraform:
     build:
       context: .
@@ -100,4 +154,83 @@ services:
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
     networks:
       - olist_network
-    command: [ "tail", "-f", "/dev/null" ]  # keeps container alive for exec commands
+    command: ["tail", "-f", "/dev/null"]
+
+  # ── postgres — Airflow metadata DB ───────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: olist_airflow_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    networks:
+      - olist_network
+    restart: unless-stopped
+
+  # ── airflow-init — one-shot setup ────────────────────────────
+  # Run once before first use: docker compose up airflow-init
+  # Reads /requirements.txt (mounted from airflow/requirements.txt)
+  # restart: "no" — exits with code 0 on success, that is correct.
+  airflow-init:
+    <<: *airflow-common
+    container_name: olist_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --quiet -r /requirements.txt && \
+        airflow db migrate && \
+        airflow users create \
+          --username admin \
+          --firstname Henry \
+          --lastname DE \
+          --role Admin \
+          --email admin@olist.local \
+          --password admin && \
+        echo "airflow-init complete ✓"
+    restart: "no"
+
+  # ── airflow-webserver — UI ────────────────────────────────────
+  # http://localhost:8080 — login: admin / admin
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: olist_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── airflow-scheduler — task runner ──────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: olist_airflow_scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────────────────
+
+volumes:
+  postgres-db-volume:
