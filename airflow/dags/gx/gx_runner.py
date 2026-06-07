@@ -22,32 +22,54 @@
 from __future__ import annotations
 
 import logging
-
+import sys
+from pathlib import Path
 logger = logging.getLogger(__name__)
 
+# ── Resolve great_expectations/ on the host volume path ──────────
+# docker-compose.yml mounts the repo root into the Airflow containers:
+#   ./great_expectations:/opt/airflow/great_expectations
+# We need to add that path so Python can import from it.
+GX_MODULE_PATH = Path("/opt/airflow/great_expectations")
 
-def run_checkpoint(table_name: str) -> None:
+def run_gx_checkpoint(table_name: str) -> None:
     """
-    Run the Great Expectations checkpoint for one Olist table.
+    Run the Great Expectations checkpoint for a single table.
 
-    STUB — raises NotImplementedError until Feature 2.2 is complete.
+    Delegates to great_expectations/gx_runner.main() after injecting
+    the module path. Exits with sys.exit(1) on failure, which causes
+    the Airflow PythonOperator task to be marked as FAILED.
 
     Args:
-        table_name: The Olist table to validate, e.g. "olist_orders".
-                    Must match a checkpoint defined in great_expectations/.
+        table_name: One of the keys in great_expectations/config.SUITE_REGISTRY.
+                    e.g. "olist_orders", "olist_order_reviews", "olist_order_items"
 
     Raises:
-        NotImplementedError: Always, until Feature 2.2 replaces this stub.
+        ImportError: great_expectations/ not mounted at expected path.
+        SystemExit(1): GX checkpoint failed or unhandled exception in gx_runner.
     """
-    logger.warning(
-        f"gx_runner.run_checkpoint('{table_name}') called but GX is not yet "
-        "implemented. This is expected in Feature 2.3. "
-        "Implement Feature 2.2 to activate this gate."
-    )
+    if not GX_MODULE_PATH.exists():
+        raise ImportError(
+            f"great_expectations module not found at {GX_MODULE_PATH}. "
+            "Check docker-compose.yml volume: ./great_expectations:/opt/airflow/great_expectations"
+        )
 
-    raise NotImplementedError(
-        f"GX checkpoint for '{table_name}' is not yet implemented. "
-        "Complete Feature 2.2 (Great Expectations setup) and replace "
-        "this stub with real checkpoint execution. "
-        "See airflow/dags/gx/gx_runner.py for the implementation contract."
-    )
+    if str(GX_MODULE_PATH) not in sys.path:
+        sys.path.insert(0, str(GX_MODULE_PATH))
+        logger.info(f"Injected {GX_MODULE_PATH} into sys.path")
+
+    # Import after path injection — must be inside the function
+    # so Airflow's DAG parser doesn't fail on import if the volume
+    # isn't mounted yet when the scheduler first scans dags/.
+    try:
+        import gx_runner as real_runner  # great_expectations/gx_runner.py
+    except ImportError as e:
+        raise ImportError(
+            f"Failed to import great_expectations/gx_runner.py: {e}. "
+            "Verify the volume mount and that great_expectations/requirements.txt is installed."
+        ) from e
+
+    logger.info(f"Running GX checkpoint for: {table_name}")
+    # Simulate CLI: inject --table arg then call main()
+    sys.argv = ["gx_runner.py", "--table", table_name]
+    real_runner.main()  # exits via sys.exit(0) on pass, sys.exit(1) on fail
