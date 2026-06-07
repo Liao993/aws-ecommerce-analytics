@@ -5,7 +5,7 @@
 # It wires together task objects returned by the factory functions
 # in tasks/ and sets the dependency chain.
 #
-# Pipeline sequence:
+# Pipeline sequence (11 tasks):
 #
 #   trigger_glue_crawler
 #          ↓
@@ -27,6 +27,29 @@
 #   dbt_marts
 #          ↓
 #   dbt_snapshot
+#          ↓
+#   refresh_gx_docs          ← NEW in Feature 2.4
+#                              Replaces Lambda + EventBridge pattern.
+#                              Runs docker exec olist_gx to confirm
+#                              GX Data Docs are current in S3.
+#
+# GX task architecture (Feature 2.4 change):
+#   make_gx_task() → PythonOperator
+#       → airflow/dags/gx/gx_runner.py    (adapter: sys.path injection)
+#           → great_expectations/gx_runner.py  (real GX pipeline)
+#               → reader → checkpoint → docs → failures
+#
+#   The adapter pattern keeps the GX module independently runnable
+#   from the terminal without Airflow. The real runner never imports
+#   anything Airflow-specific.
+#
+# refresh_gx_docs task:
+#   make_refresh_gx_docs_task() → BashOperator
+#       → docker exec olist_gx python -c "..."
+#           → great_expectations/docs.py (confirms S3 docs count > 0)
+#
+#   Uses BashOperator + docker exec because GX/boto3 dependencies
+#   live in olist_gx, not in the Airflow image.
 #
 # Dependency syntax:
 #   task_a >> task_b       → task_b runs after task_a
@@ -56,7 +79,7 @@ from tasks.glue_tasks import (
     make_load_to_redshift_task,
 )
 from tasks.gx_tasks import make_gx_task
-
+from tasks.docs_tasks import make_refresh_gx_docs_task
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
@@ -120,6 +143,8 @@ with DAG(
     dbt_marts        = make_dbt_marts_task()
     dbt_snapshot     = make_dbt_snapshot_task()
 
+    # Add after the dbt_snapshot task definition:
+    refresh_gx_docs = make_refresh_gx_docs_task(dag)
     # ─────────────────────────────────────────────────────────────
     # Dependency chain
     # ─────────────────────────────────────────────────────────────
@@ -135,3 +160,6 @@ with DAG(
 
     # Sequential dbt chain: each layer depends on the one before
     load_redshift >> dbt_staging >> dbt_intermediate >> dbt_marts >> dbt_snapshot
+
+    # Wire it at the end of the dependency chain:
+    dbt_snapshot >> refresh_gx_docs
