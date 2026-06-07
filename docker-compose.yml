@@ -63,9 +63,9 @@ x-airflow-common: &airflow-common
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/plugins:/opt/airflow/plugins
     - /var/run/docker.sock:/var/run/docker.sock
-    # requirements.txt stays in airflow/ (belongs to Airflow stack).
-    # Mounted here so airflow-init can pip install from it.
     - ./airflow/requirements.txt:/requirements.txt
+    - ./great_expectations:/opt/airflow/great_expectations
+
 
   env_file:
     - .env

@@ -32,6 +32,7 @@ GLUE_JOBS = {
     "csv_to_parquet":   "olist-csv-to-parquet",
     "load_to_redshift": "olist-load-to-redshift",
 }
+S3_DOCS_PREFIX = "dev/analytics/gx-docs"
 
 # Airflow AWS Connection ID — set in Airflow UI or via env var
 # AIRFLOW_CONN_AWS_DEFAULT must be configured before running the DAG.
@@ -55,7 +56,7 @@ GX_RUNNER_MODULE = "gx.gx_runner"
 
 # Name of the dbt Docker container — must match container_name in docker-compose.yml
 DBT_CONTAINER_NAME = "olist_dbt"
-
+GX_CONTAINER_NAME  = "olist_gx"
 # dbt project directory INSIDE the dbt container (matches working_dir in docker-compose.yml)
 DBT_PROJECT_DIR = "/usr/app/dbt"
 

@@ -1,6 +1,9 @@
 
 
 import logging
+from urllib.parse import urlparse
+
+import boto3
 # pyrefly: ignore [missing-import]
 from awsglue.context import GlueContext
 # pyrefly: ignore [missing-import]
@@ -10,6 +13,36 @@ from awsglue.dynamicframe import DynamicFrame
 logger = logging.getLogger(__name__)
  
  
+def _delete_s3_prefix(s3_uri: str) -> None:
+    """
+    Remove existing objects under a processed table prefix before rewriting.
+
+    Glue's S3 sink appends by default. Without this cleanup, every DAG run
+    adds another copy of the same table and uniqueness checks fail downstream.
+    """
+    parsed = urlparse(s3_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Expected S3 URI, got: {s3_uri}")
+
+    bucket = parsed.netloc
+    prefix = parsed.path.lstrip("/")
+    if prefix and not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+
+    deleted = 0
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+        for i in range(0, len(objects), 1000):
+            batch = objects[i : i + 1000]
+            if batch:
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+                deleted += len(batch)
+
+    logger.info(f"Deleted {deleted} existing objects from {s3_uri}")
+
 
  
  
@@ -39,6 +72,8 @@ def write_parquet(
         f"Writing {table_name} → {target_path} | "
         f"partitions: {partition_keys or 'none'}"
     )
+    _delete_s3_prefix(target_path)
+
     # Processed tables go into a dedicated catalog database — not the
     # raw source database — so schema conflicts can never occur between
     # raw and processed entries sharing the same namespace.
