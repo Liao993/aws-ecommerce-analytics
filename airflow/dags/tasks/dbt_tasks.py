@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 
-from airflow.operators.bash import BashOperator
+from airflow.operators.bash import BashOperator # type: ignore
 
 from config import DBT_CONFIG, DBT_SELECTORS
 

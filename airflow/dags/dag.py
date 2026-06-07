@@ -40,7 +40,7 @@ import logging
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.utils.task_group import TaskGroup
+from airflow.utils.task_group import TaskGroup # type: ignore
 
 from callbacks.notify import notify_on_failure
 from config import DAG_CONFIG, GX_TABLES

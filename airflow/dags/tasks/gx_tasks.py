@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator # type: ignore
 
 from config import GX_TABLES
 

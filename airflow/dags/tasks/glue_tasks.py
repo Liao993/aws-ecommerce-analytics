@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import logging
 
-from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
-from airflow.providers.amazon.aws.operators.glue_crawler import GlueCrawlerOperator
+from airflow.providers.amazon.aws.operators.glue import GlueJobOperator # type: ignore
+from airflow.providers.amazon.aws.operators.glue_crawler import GlueCrawlerOperator # type: ignore
 
 from config import AWS_CONN_ID, AWS_REGION, GLUE_CRAWLER_NAME, GLUE_JOBS
 
