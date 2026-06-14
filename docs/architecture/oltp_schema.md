@@ -1,7 +1,6 @@
 # Olist OLTP Schema — Entity Relationship Diagram
 
-**Source:** Brazilian E-Commerce dataset (Kaggle)
-**Scale:** 9 tables, ~100K orders, date range 2016–2018
+**Source:**  E-Commerce dataset 
 **Location:** All tables reside in Redshift `dev_raw` schema after the Glue ETL pipeline
 
 ---
