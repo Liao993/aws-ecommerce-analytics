@@ -53,7 +53,7 @@ airflow/logs/
 
 # Others
 great_expectations/uncommitted/
-docs
+docs/claude
 
 #Claude
 .claudeignore
