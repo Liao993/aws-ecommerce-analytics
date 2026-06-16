@@ -1,0 +1,9 @@
+version: 2
+
+# Mart models — built in Epics 4 and 5.
+# Materialized as tables. Consumed by Streamlit dashboard and analysts.
+# Final layer: dim_customers, dim_sellers, dim_products, dim_date,
+# dim_geolocation, fact_order_items, fact_orders, fact_payments,
+# mart_sales_overview, mart_seller_performance, mart_rfm_segmentation
+
+models: []

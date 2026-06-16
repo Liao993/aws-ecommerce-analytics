@@ -1,0 +1,8 @@
+version: 2
+
+# Intermediate models — built in Epic 4.
+# These are pre-aggregations and joins between staging models,
+# preparing data for the mart layer.
+# Examples: int_order_items_enriched, int_customer_orders_summary
+
+models: []

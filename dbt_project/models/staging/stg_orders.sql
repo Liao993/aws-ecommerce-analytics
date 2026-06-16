@@ -4,7 +4,7 @@
     )
 }}
 
-with source as (
+with olist_orders as (
 
     select * from {{ source('dev_raw', 'olist_orders') }}
 
@@ -35,7 +35,7 @@ renamed as (
         cast(order_delivered_customer_date as timestamp)  as order_delivered_customer_date,
         cast(order_estimated_delivery_date as timestamp)  as order_estimated_delivery_date
 
-    from source
+    from olist_orders
 
 )
 
