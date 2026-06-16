@@ -1,44 +1,5 @@
 version: 2
 
-# ── Source definition ─────────────────────────────────────────────────────────
-# This tells dbt WHERE the raw data lives. {{ source() }} in stg_orders.sql
-# resolves to this entry — if the table moves or gets renamed, you change it
-# here once, not in every model that references it.
-
-sources:
-  - name: dev_raw
-    schema: dev_raw          # Redshift schema name — matches what Glue loaded into
-    description: >
-      Raw Olist e-commerce tables loaded by the Glue load_to_redshift job.
-      Source of truth — never modified by dbt. All transformations begin here.
-
-    tables:
-      - name: olist_orders
-        description: >
-          One row per order. Contains order lifecycle timestamps from purchase
-          through estimated delivery. Incrementally loaded — new months appended
-          as the pipeline runs.
-
-        columns:
-          - name: order_id
-            description: Primary key. Unique identifier for each order.
-          - name: customer_id
-            description: FK to olist_customers. Not unique — one customer can have multiple orders.
-          - name: order_status
-            description: >
-              Lifecycle status. Known values: created, approved, invoiced,
-              processing, shipped, delivered, unavailable, canceled.
-          - name: order_purchase_timestamp
-            description: When the customer placed the order. Used as the partition key in S3.
-          - name: order_approved_at
-            description: When payment was approved. Null for canceled orders.
-          - name: order_delivered_carrier_date
-            description: When the seller handed the order to the carrier.
-          - name: order_delivered_customer_date
-            description: When the customer received the order. Null if not yet delivered.
-          - name: order_estimated_delivery_date
-            description: Estimated delivery date shown to the customer at purchase time.
-
 # ── Model definition ──────────────────────────────────────────────────────────
 
 models:

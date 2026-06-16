@@ -1,0 +1,135 @@
+version: 2
+
+sources:
+  - name: dev_raw
+    schema: dev_raw
+    description: >
+      All 9 Olist raw tables loaded by the Glue load_to_redshift job.
+      Source of truth — never modified by dbt. All transformations begin here.
+    loaded_at_field: order_purchase_timestamp  # used by dbt source freshness for olist_orders
+
+    tables:
+      - name: olist_orders
+        description: >
+          One row per order. Contains lifecycle timestamps from purchase through delivery.
+          ~99K rows. order_id is the primary key.
+        columns:
+          - name: order_id
+            description: Primary key. Unique identifier per order.
+          - name: customer_id
+            description: FK to olist_customers. One customer can have multiple order_ids.
+          - name: order_status
+            description: Lifecycle status. Values: created, approved, invoiced, processing, shipped, delivered, unavailable, canceled.
+          - name: order_purchase_timestamp
+            description: When the customer placed the order. Used as partition key in S3.
+
+      - name: olist_customers
+        description: >
+          One row per order-customer (customer_id). customer_unique_id is the true customer identifier.
+          ~99K rows. A single person can have multiple customer_ids (one per order).
+        columns:
+          - name: customer_id
+            description: PK at order level. Not the true customer identity — one per order.
+          - name: customer_unique_id
+            description: True customer identity. Use this as the business key in dim_customers.
+          - name: customer_city
+            description: City of the customer. May change over time — SCD Type 2 in dim_customers.
+          - name: customer_state
+            description: Brazilian state abbreviation.
+
+      - name: olist_order_items
+        description: >
+          One row per item per order. ~112K rows. Composite key: order_id + order_item_id.
+          Multiple rows per order are expected (multi-item orders).
+        columns:
+          - name: order_id
+            description: FK to olist_orders.
+          - name: order_item_id
+            description: Sequence number within order. Starts at 1 per order.
+          - name: product_id
+            description: FK to olist_products.
+          - name: seller_id
+            description: FK to olist_sellers.
+          - name: price
+            description: Item price in BRL. Always > 0.
+          - name: freight_value
+            description: Freight cost in BRL. Can be 0 for free shipping promotions.
+
+      - name: olist_order_payments
+        description: >
+          One row per payment record. ~104K rows. Multiple rows per order are common
+          (installments or mixed payment methods). No single primary key.
+        columns:
+          - name: order_id
+            description: FK to olist_orders.
+          - name: payment_sequential
+            description: Sequence number of this payment within the order. Starts at 1.
+          - name: payment_type
+            description: Payment method. Values: credit_card, boleto, voucher, debit_card.
+          - name: payment_installments
+            description: Number of installments. 1 = paid in full.
+          - name: payment_value
+            description: Amount paid in this payment record, BRL.
+
+      - name: olist_order_reviews
+        description: >
+          One row per review. ~100K rows. review_id is NOT perfectly unique —
+          the GX checkpoint uses 95%+ uniqueness, not strict uniqueness (known Olist data quirk).
+        columns:
+          - name: review_id
+            description: Near-unique review identifier. ~95%+ unique. Known duplicates in source.
+          - name: order_id
+            description: FK to olist_orders.
+          - name: review_score
+            description: Customer rating, 1–5.
+          - name: review_creation_date
+            description: When the review form was sent to the customer.
+          - name: review_answer_timestamp
+            description: When the customer submitted the review. Null if no response.
+
+      - name: olist_products
+        description: >
+          Product catalog. ~33K rows. product_id is the primary key.
+          Note: column names 'product_name_lenght' and 'product_description_lenght'
+          are intentional typos from the source CSV — preserved to match Redshift schema.
+        columns:
+          - name: product_id
+            description: Primary key.
+          - name: product_category_name
+            description: FK to product_category_name_translation. Portuguese category name.
+          - name: product_weight_g
+            description: Product weight in grams.
+
+      - name: olist_sellers
+        description: >
+          Seller master data. ~3K rows (smallest table). seller_id is the primary key.
+        columns:
+          - name: seller_id
+            description: Primary key.
+          - name: seller_city
+            description: City where seller operates. May change — SCD Type 2 in dim_sellers.
+          - name: seller_state
+            description: Brazilian state abbreviation.
+
+      - name: olist_geolocation
+        description: >
+          Zip code to lat/lng mapping. ~1M rows, ~19K unique zip codes.
+          Multiple lat/lng points per zip — aggregated to centroid in dim_geolocation.
+          No meaningful primary key (zip is not unique).
+        columns:
+          - name: geolocation_zip_code_prefix
+            description: Brazilian zip code prefix (5 digits). NOT unique in this table.
+          - name: geolocation_lat
+            description: Latitude coordinate for a point within this zip.
+          - name: geolocation_lng
+            description: Longitude coordinate.
+
+      - name: product_category_name_translation
+        description: >
+          Reference/lookup table. ~70 rows. Maps Portuguese product category names
+          to English. Used to populate product_category_name_english in dim_products.
+        columns:
+          - name: product_category_name
+            description: Primary key. Portuguese category name, matches olist_products.product_category_name.
+          - name: product_category_name_english
+            description: English translation of the category name.
