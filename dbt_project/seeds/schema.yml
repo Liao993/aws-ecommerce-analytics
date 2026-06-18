@@ -1,0 +1,9 @@
+version: 2
+seeds:
+  - name: product_category_name_translation
+    description: Maps Portuguese product category names to English translations. 73 rows. Static reference table.
+    columns:
+      - name: product_category_name
+        tests: [not_null, unique]
+      - name: product_category_name_english
+        tests: [not_null]

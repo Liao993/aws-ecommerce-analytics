@@ -1,0 +1,160 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: >
+      Staging model for olist_customers. Renames columns to snake_case,
+      casts zip_code_prefix to VARCHAR(16), and adds a surrogate key built
+      on customer_unique_id (the true person identifier — customer_id is
+      order-scoped and not reused across orders).
+    columns:
+      - name: customer_key
+        description: >
+          Surrogate key. MD5 hash of customer_unique_id. Used in dim_customers
+          SCD Type 2 snapshots and mart_rfm_segmentation to correctly identify
+          the same person across multiple orders.
+        tests:
+          - not_null
+
+      - name: customer_id
+        description: >
+          Order-scoped natural key from source. A new customer_id is generated
+          per order — not a reliable repeat-customer identifier. Kept because
+          olist_orders joins via customer_id. Do not use for unique customer counts.
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_unique_id
+        description: >
+          True person identifier. Persists across orders for repeat buyers.
+          Use this column for unique customer counts and cohort analysis.
+        tests:
+          - not_null
+    
+
+      - name: zip_code_prefix
+        description: Customer postal zip code prefix (5 digits). Cast from source VARCHAR.
+        tests:
+          - not_null
+
+      - name: city
+        description: Customer city name from source.
+
+      - name: state
+        description: Customer state code (2-letter Brazilian state abbreviation).
+
+  - name: stg_sellers
+    description: >
+      Staging model for olist_sellers. Renames columns to snake_case,
+      casts zip_code_prefix to VARCHAR(16), and adds a surrogate key.
+      SCD Type 2 source — seller_id is the business key.
+    columns:
+      - name: seller_key
+        description: Surrogate key. MD5 hash of seller_id. Stable join key for dim_sellers.
+        tests:
+          - not_null
+          - unique
+
+      - name: seller_id
+        description: Natural key from source. Unique per seller.
+        tests:
+          - not_null
+          - unique
+
+      - name: zip_code_prefix
+        description: Seller postal zip code prefix. Cast from source VARCHAR.
+        tests:
+          - not_null
+
+      - name: city
+        description: Seller city name from source.
+
+      - name: state
+        description: Seller state code (2-letter Brazilian state abbreviation).
+
+  - name: stg_products
+    description: >
+      Staging model for olist_products. Renames columns, fixes the source typo
+      (product_name_lenght → name_length), casts dimension columns to DECIMAL(10,2),
+      and adds a surrogate key. Joined to the product_category_name_translation seed
+      via LEFT JOIN to add category_name_english.
+    columns:
+      - name: product_key
+        description: Surrogate key. MD5 hash of product_id. Stable join key for dim_products.
+        tests:
+          - not_null
+          - unique
+
+      - name: product_id
+        description: Natural key from source. Unique per product.
+        tests:
+          - not_null
+          - unique
+
+      - name: category_name
+        description: Portuguese product category name from source.
+
+      - name: category_name_english
+        description: >
+          English translation of category_name. Joined from the
+          product_category_name_translation seed via LEFT JOIN. NULL for products
+          with no category or unmapped categories — expected and correct.
+
+      - name: name_length
+        description: >
+          Character count of the product name. Renamed from product_name_lenght
+          (intentional source typo from Olist). No downstream model uses the typo spelling.
+
+      - name: description_length
+        description: Character count of the product description. Renamed from product_description_lenght.
+
+      - name: photos_qty
+        description: Number of product photos in the listing.
+
+      - name: weight_g
+        description: Product weight in grams. Cast to DECIMAL(10,2).
+
+      - name: length_cm
+        description: Product length in cm. Cast to DECIMAL(10,2).
+
+      - name: height_cm
+        description: Product height in cm. Cast to DECIMAL(10,2).
+
+      - name: width_cm
+        description: Product width in cm. Cast to DECIMAL(10,2).
+
+  - name: stg_geolocation
+    description: >
+      Staging model for olist_geolocation. Aggregates ~1M source rows to one row
+      per zip_code_prefix using centroid (average lat/lng). Eliminates the fan-out
+      that would occur if customers or sellers (one row per zip) joined the raw
+      multi-row geolocation table directly. Reduces from ~1M to ~19K rows.
+    columns:
+      - name: geolocation_key
+        description: Surrogate key. MD5 hash of zip_code_prefix. One row per zip after aggregation.
+        tests:
+          - not_null
+          - unique
+
+      - name: zip_code_prefix
+        description: Postal zip code prefix. Unique after GROUP BY aggregation.
+        tests:
+          - not_null
+          - unique
+
+      - name: latitude
+        description: Centroid latitude (average of all coordinate readings for this zip). DECIMAL(18,15).
+        tests:
+          - not_null
+
+      - name: longitude
+        description: Centroid longitude (average of all coordinate readings for this zip). DECIMAL(18,15).
+        tests:
+          - not_null
+
+      - name: city
+        description: City name. MIN() used as a stable tiebreaker across multiple readings per zip.
+
+      - name: state
+        description: State code. MIN() used as a stable tiebreaker.
