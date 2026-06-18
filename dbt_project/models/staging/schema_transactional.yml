@@ -1,0 +1,206 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: >
+      Staging model for olist_orders. Renames columns to snake_case,
+      casts all timestamp fields to TIMESTAMP, and adds a surrogate key.
+      Materialized as a view — no storage cost, always reflects source.
+
+    columns:
+      - name: order_key
+        description: >
+          Surrogate key. MD5 hash of order_id. Stable join key used in
+          downstream intermediate and mart models.
+        tests:
+          - not_null
+          - unique
+
+      - name: order_id
+        description: Natural key from source. Preserved for traceability.
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_id
+        description: FK to stg_customers. Not tested for uniqueness — one customer can have multiple orders.
+        tests:
+          - not_null
+
+      - name: order_status
+        description: Order lifecycle status.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - created
+                - approved
+                - invoiced
+                - processing
+                - shipped
+                - delivered
+                - unavailable
+                - canceled
+
+      - name: order_purchase_timestamp
+        description: Order placement timestamp. Cast to TIMESTAMP.
+        tests:
+          - not_null
+
+      - name: order_approved_at
+        description: Payment approval timestamp. Null for canceled orders — no not_null test.
+
+      - name: order_delivered_carrier_date
+        description: Carrier handoff timestamp. Null until shipped.
+
+      - name: order_delivered_customer_date
+        description: Customer receipt timestamp. Null until delivered.
+
+      - name: order_estimated_delivery_date
+        description: Estimated delivery shown to customer at purchase time.
+        tests:
+          - not_null
+
+  - name: stg_order_items
+    description: >
+      Staging model for olist_order_items. Grain is one row per item per order
+      (composite key: order_id + order_item_id). Renames columns, casts price and
+      freight_value to DECIMAL(10,2), and adds a composite surrogate key.
+    columns:
+      - name: order_item_key
+        description: >
+          Surrogate key. MD5 hash of order_id + order_item_id. Composite because
+          order_item_id is only unique within an order (1, 2, 3…), not globally.
+        tests:
+          - not_null
+          - unique
+
+      - name: order_id
+        description: FK to stg_orders. Not unique — one order has multiple items.
+        tests:
+          - not_null
+
+      - name: order_item_id
+        description: Item sequence number within an order. Not globally unique — composite key required.
+        tests:
+          - not_null
+
+      - name: product_id
+        description: FK to stg_products.
+        tests:
+          - not_null
+
+      - name: seller_id
+        description: FK to stg_sellers.
+        tests:
+          - not_null
+
+      - name: shipping_limit_date
+        description: Deadline for the seller to hand off to carrier. Cast to TIMESTAMP.
+
+      - name: price
+        description: Item price in BRL. Cast to DECIMAL(10,2).
+        tests:
+          - not_null
+
+      - name: freight_value
+        description: Freight cost in BRL. 0 is valid (free shipping promotions). Cast to DECIMAL(10,2).
+        tests:
+          - not_null
+
+  - name: stg_payments
+    description: >
+      Staging model for olist_order_payments. Multiple rows per order (installments
+      and split payment types). Composite surrogate key on order_id + payment_sequential.
+      Renames columns and casts payment_value to DECIMAL(10,2).
+    columns:
+      - name: payment_key
+        description: >
+          Surrogate key. MD5 hash of order_id + payment_sequential. Composite because
+          a single order can have multiple payment rows (installments, split types).
+        tests:
+          - not_null
+          - unique
+
+      - name: order_id
+        description: FK to stg_orders. Not unique — one order can have multiple payment rows.
+        tests:
+          - not_null
+
+      - name: payment_sequential
+        description: Sequence number of this payment row within an order. Not globally unique.
+        tests:
+          - not_null
+
+      - name: payment_type
+        description: >
+          Payment method. Known values from Olist source: credit_card, boleto, voucher,
+          debit_card, not_defined. not_defined appears in the dataset for orders where
+          payment type was not recorded — treated as a valid source value, not a data error.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - credit_card
+                - boleto
+                - voucher
+                - debit_card
+                - not_defined
+
+      - name: payment_installments
+        description: Number of installments selected by the customer.
+        tests:
+          - not_null
+
+      - name: payment_value
+        description: Payment amount in BRL for this row. Cast to DECIMAL(10,2).
+        tests:
+          - not_null
+
+  - name: stg_reviews
+    description: >
+      Staging model for olist_order_reviews. review_id is near-unique but not a
+      reliable primary key in the Olist source, so this model uses the composite
+      grain review_id + order_id and keeps the most recent response for duplicate
+      composite rows.
+    columns:
+      - name: review_key
+        description: Surrogate key. MD5 hash of review_id + order_id, matching the review row grain.
+        tests:
+          - not_null
+          - unique
+
+      - name: review_id
+        description: >
+          Natural key from source. ~5% duplicates exist in the raw Olist dataset
+          (known source quirk, validated by Great Expectations). Do not test this
+          column as unique by itself.
+        tests:
+          - not_null
+          
+
+      - name: order_id
+        description: FK to stg_orders. Every review must link to an order.
+        tests:
+          - not_null
+
+      - name: review_score
+        description: Customer satisfaction score. Must be 1–5 per Olist's rating system.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+
+      - name: comment_title
+        description: Short review title. Null for reviews without a written title.
+
+      - name: comment_message
+        description: Full review text. Null for reviews without a written message.
+
+      - name: review_creation_date
+        description: When the review request was sent to the customer. Cast to TIMESTAMP.
+        tests:
+          - not_null
+
+      - name: review_answer_timestamp
+        description: When the customer submitted the review. Null for unanswered reviews.

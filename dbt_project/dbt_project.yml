@@ -30,3 +30,7 @@ models:
 
     marts:
       +materialized: table
+seeds:
+  olist_ecommerce:
+    product_category_name_translation:
+      +schema: seeds

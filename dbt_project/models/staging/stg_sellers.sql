@@ -1,5 +1,21 @@
--- Stub: built in Epic 4
--- Staging view for olist_sellers.
--- SCD Type 2 source — seller_id is the business key.
 {{ config(materialized='view') }}
-select * from {{ source('dev_raw', 'olist_sellers') }}
+
+with source as (
+    select * from {{ source('dev_raw', 'olist_sellers') }}
+),
+
+renamed as (
+    select
+        -- Keys
+        seller_id,
+        {{ dbt_utils.generate_surrogate_key(['seller_id']) }}          as seller_key,
+
+        -- Attributes
+        cast(seller_zip_code_prefix as varchar(16))    as zip_code_prefix,
+        seller_city                                     as city,
+        seller_state                                    as state
+
+    from source
+)
+
+select * from renamed

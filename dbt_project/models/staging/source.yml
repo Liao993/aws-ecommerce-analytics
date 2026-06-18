@@ -1,0 +1,218 @@
+version: 2
+
+# ─────────────────────────────────────────────────────────────────
+# sources.yml — Staging layer source definitions
+#
+# Single responsibility: tell dbt WHERE the raw data lives.
+# {{ source('dev_raw', 'olist_orders') }} in any staging model
+# resolves to this entry. If a table moves or gets renamed, you
+# change it here once — not in every model that references it.
+#
+# All 9 Olist source tables are declared here, including
+# product_category_name_translation which is consumed directly
+# by stg_products (JOIN) and has no standalone staging model.
+# ─────────────────────────────────────────────────────────────────
+
+sources:
+  - name: dev_raw
+    schema: dev_raw
+    description: >
+      Raw Olist e-commerce tables loaded by the Glue load_to_redshift job.
+      Source of truth — never modified by dbt. All transformations begin here.
+      9 tables covering orders, customers, sellers, products, payments,
+      reviews, geolocation, and category translations.
+
+    tables:
+
+      # ── Transactional tables ──────────────────────────────────
+
+      - name: olist_orders
+        description: >
+          One row per order. Central transactional table linking customers
+          to all downstream order activity. ~99K rows.
+          Contains full order lifecycle timestamps from purchase through delivery.
+        columns:
+          - name: order_id
+            description: Primary key. Unique identifier for each order.
+          - name: customer_id
+            description: FK to olist_customers. Not unique — one customer can place multiple orders.
+          - name: order_status
+            description: >
+              Lifecycle status. Known values: created, approved, invoiced,
+              processing, shipped, delivered, unavailable, canceled.
+          - name: order_purchase_timestamp
+            description: When the customer placed the order. Partition key in S3.
+          - name: order_approved_at
+            description: When payment was approved. Null for canceled orders.
+          - name: order_delivered_carrier_date
+            description: When the seller handed the order to the carrier.
+          - name: order_delivered_customer_date
+            description: When the customer received the order. Null if not yet delivered.
+          - name: order_estimated_delivery_date
+            description: Estimated delivery date shown to the customer at purchase time.
+
+      - name: olist_order_items
+        description: >
+          One row per item per order. ~112K rows — highest-cardinality transactional table.
+          Composite key: order_id + order_item_id. A single order can contain
+          multiple items from different sellers.
+        columns:
+          - name: order_id
+            description: FK to olist_orders. Not unique — one order can have multiple items.
+          - name: order_item_id
+            description: >
+              Sequential item number within an order (1, 2, 3…).
+              Only unique within an order — NOT globally unique.
+              Composite key with order_id.
+          - name: product_id
+            description: FK to olist_products.
+          - name: seller_id
+            description: FK to olist_sellers.
+          - name: shipping_limit_date
+            description: Deadline for the seller to hand the item to the carrier.
+          - name: price
+            description: Item price in BRL. Strictly positive — zero-price items do not exist in Olist.
+          - name: freight_value
+            description: Freight cost in BRL. Zero is valid for free-shipping promotions.
+
+      - name: olist_order_payments
+        description: >
+          One row per payment record per order. ~104K rows.
+          Multiple rows per order are expected — customers can split payment
+          across types (credit card + voucher) and pay in installments.
+          Promoted to fact_payments in the mart layer.
+        columns:
+          - name: order_id
+            description: FK to olist_orders. Not unique — one order can have multiple payment rows.
+          - name: payment_sequential
+            description: >
+              Sequence number for payment rows within an order. Starts at 1.
+              Combined with order_id forms the composite natural key.
+          - name: payment_type
+            description: "Payment method. Known values: credit_card, boleto, voucher, debit_card."
+          - name: payment_installments
+            description: Number of installments chosen by the customer.
+          - name: payment_value
+            description: Payment amount for this row in BRL.
+
+      - name: olist_order_reviews
+        description: >
+          One row per review. ~100K rows.
+          review_id is ~95% unique — known source data quirk documented
+          in the Great Expectations suite (Epic 2). Do not enforce strict
+          uniqueness on review_id at the staging layer.
+        columns:
+          - name: review_id
+            description: >
+              Near-unique review identifier. ~95% unique — not a reliable strict PK.
+              Great Expectations enforces proportion uniqueness upstream in the pipeline.
+          - name: order_id
+            description: FK to olist_orders.
+          - name: review_score
+            description: Customer rating. Integer 1–5 only. Values outside this range indicate upstream corruption.
+          - name: review_comment_title
+            description: Optional short title. Null when customer left no comment.
+          - name: review_comment_message
+            description: Optional free-text review body. Null when customer left no comment.
+          - name: review_creation_date
+            description: When the review form was sent to the customer.
+          - name: review_answer_timestamp
+            description: When the customer submitted the review. Null for unanswered reviews.
+
+      # ── Dimension tables ──────────────────────────────────────
+
+      - name: olist_customers
+        description: >
+          One row per order-scoped customer_id. ~99K rows.
+          customer_id is order-scoped and NOT reused across orders.
+          customer_unique_id is the true repeat-customer identifier
+          and serves as the business key for SCD Type 2 in dim_customers.
+        columns:
+          - name: customer_id
+            description: >
+              Order-scoped PK. Unique per row, but represents one
+              customer-order pairing — not a reliable repeat-customer key.
+          - name: customer_unique_id
+            description: >
+              True repeat-customer identifier. Business key for SCD Type 2
+              dim_customers. Use this for customer-level aggregations.
+          - name: customer_zip_code_prefix
+            description: 5-digit zip prefix. FK to olist_geolocation.
+          - name: customer_city
+            description: City name as reported at order time.
+          - name: customer_state
+            description: 2-letter Brazilian state code.
+
+      - name: olist_sellers
+        description: >
+          One row per seller. ~3K rows — smallest dimension table.
+          seller_id is the business key for SCD Type 2 in dim_sellers.
+          Seller city and state can change over time.
+        columns:
+          - name: seller_id
+            description: Primary key. Unique identifier for each seller.
+          - name: seller_zip_code_prefix
+            description: 5-digit zip prefix. FK to olist_geolocation.
+          - name: seller_city
+            description: City where the seller operates.
+          - name: seller_state
+            description: 2-letter Brazilian state code.
+
+      - name: olist_products
+        description: >
+          One row per product. ~33K rows.
+          Joins to product_category_name_translation for English category labels.
+          SCD Type 1 — product attributes are overwritten on change (no history needed).
+          Note: product_name_lenght and product_description_lenght are intentional
+          source typos in the Olist CSV — preserved here, corrected in stg_products.
+        columns:
+          - name: product_id
+            description: Primary key. Unique identifier for each product.
+          - name: product_category_name
+            description: Portuguese category name. FK to product_category_name_translation.
+          - name: product_name_lenght
+            description: Character count of the product name. Intentional typo in source CSV — renamed in staging.
+          - name: product_description_lenght
+            description: Character count of the product description. Intentional typo in source CSV — renamed in staging.
+          - name: product_photos_qty
+            description: Number of product photos listed.
+          - name: product_weight_g
+            description: Product weight in grams.
+          - name: product_length_cm
+            description: Product length in centimetres.
+          - name: product_height_cm
+            description: Product height in centimetres.
+          - name: product_width_cm
+            description: Product width in centimetres.
+
+      - name: olist_geolocation
+        description: >
+          ~1M rows across ~19K distinct zip code prefixes.
+          Multiple lat/lng coordinate readings per zip — represents all
+          delivery points in that postal zone. Aggregated to a centroid
+          (avg lat/lng) in dim_geolocation to prevent fan-out joins downstream.
+          No staging model — consumed directly in the intermediate layer.
+        columns:
+          - name: geolocation_zip_code_prefix
+            description: 5-digit zip prefix. Not unique at source — multiple rows per zip.
+          - name: geolocation_lat
+            description: Latitude coordinate for this delivery point.
+          - name: geolocation_lng
+            description: Longitude coordinate for this delivery point.
+          - name: geolocation_city
+            description: City name for this coordinate.
+          - name: geolocation_state
+            description: 2-letter Brazilian state code.
+
+      # ── Reference / lookup table ──────────────────────────────
+
+      - name: product_category_name_translation
+        description: >
+          ~70-row reference table mapping Portuguese product category names
+          to English translations. No standalone staging model — consumed
+          via JOIN inside stg_products to produce the category_name_english column.
+        columns:
+          - name: product_category_name
+            description: Portuguese category name. PK — unique in this table.
+          - name: product_category_name_english
+            description: English translation of the category name.
