@@ -1,12 +1,25 @@
 {{
     config(
-        materialized = 'view'
+        materialized = 'incremental',
+        unique_key = 'order_key',
+        incremental_strategy = 'merge'
     )
 }}
 
 with olist_orders as (
 
     select * from {{ source('dev_raw', 'olist_orders') }}
+
+
+    {% if is_incremental() %}
+        -- Lookback 3 days from the latest order already in this table.
+        -- Why 3 days: late-arriving status updates (e.g. a delivered confirmation
+        -- arriving in S3 after the pipeline ran) are caught on the next run
+        -- without requiring a full rebuild of all 100K rows.
+        where cast(order_purchase_timestamp as timestamp) >= (
+            select max(order_purchase_timestamp) from {{ this }}
+        ) - interval '3 days'
+    {% endif %}
 
 ),
 
