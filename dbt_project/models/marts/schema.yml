@@ -1,9 +1,284 @@
 version: 2
 
-# Mart models — built in Epics 4 and 5.
-# Materialized as tables. Consumed by Streamlit dashboard and analysts.
-# Final layer: dim_customers, dim_sellers, dim_products, dim_date,
-# dim_geolocation, fact_order_items, fact_orders, fact_payments,
-# mart_sales_overview, mart_seller_performance, mart_rfm_segmentation
+models:
+  # 1. Product Category Performance Mart ───────────────────────────────────────
+  - name: mart_category_performance
+    description: >
+      Aggregates e-commerce performance by product category (English name). 
+      Excludes non-delivered orders and null categories to evaluate clean category performance.
+      Grain: One row per category_name_english.
+    columns:
+      - name: category_name_english
+        description: The primary key. The translated English name of the product category.
+        tests:
+          - not_null
+          - unique
 
-models: []
+      - name: order_count
+        description: Total number of unique orders placed containing an item from this category.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Total historical product revenue generated in BRL (freight excluded).
+        tests:
+          - not_null
+
+      - name: avg_review_score
+        description: The average customer satisfaction rating (1 to 5) given for orders in this category.
+        tests:
+          - not_null
+
+      - name: avg_delay_days
+        description: Average days an order delivery was delayed past its original estimated deadline.
+
+  # 2. Customer Cohorts Mart ───────────────────────────────────────────────────
+  - name: mart_customer_cohorts
+    description: >
+      Cohort analysis tracking customer groups based on their first acquisition month.
+      Exposes behavioral timeline metrics and 30/60/90-day repeat operational indicators.
+      Grain: One row per customer_unique_id.
+    columns:
+      - name: customer_unique_id
+        description: The primary key. Unique identifier tying repeat natural customers across orders.
+        tests:
+          - not_null
+          - unique
+
+      - name: cohort_month
+        description: The truncation date (YYYY-MM-01) representing the customer's first purchase month.
+        tests:
+          - not_null
+
+      - name: first_order_date
+        description: Timestamp of the customer's first chronological purchase.
+        tests:
+          - not_null
+
+      - name: total_orders
+        description: Lifetime count of unique orders finalized by this specific customer.
+        tests:
+          - not_null
+
+      - name: repeat_within_30d
+        description: Binary flag (1 or 0) indicating if a customer returned to purchase between 1 and 30 days.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+
+      - name: repeat_within_60d
+        description: Binary flag (1 or 0) indicating if a customer returned to purchase between 1 and 60 days.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+
+      - name: repeat_within_90d
+        description: Binary flag (1 or 0) indicating if a customer returned to purchase between 1 and 90 days.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+
+      - name: is_repeat_customer
+        description: Flags if the customer has a total lifetime order volume strictly greater than 1.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+
+  # 3. Delivery Analysis Mart ──────────────────────────────────────────────────
+  - name: mart_delivery_analysis
+    description: >
+      Aggregates shipping and distribution performance across regional origin-destination state corridors. 
+      Filters out low-density corridors (< 10 orders) to guarantee baseline statistical relevance.
+      Grain: One row per corridor (origin_state + destination_state pairing).
+    columns:
+      - name: corridor
+        description: The primary key. Hyphenated configuration mapping origin state to destination state (e.g., 'SP-RJ').
+        tests:
+          - not_null
+          - unique
+
+      - name: origin_state
+        description: The 2-letter shipping origin state abbreviation code.
+        tests:
+          - not_null
+
+      - name: destination_state
+        description: The 2-letter customer destination state abbreviation code.
+        tests:
+          - not_null
+
+      - name: order_count
+        description: Volume of distinct orders crossing this physical freight pathway.
+        tests:
+          - not_null
+
+      - name: late_pct
+        description: Percentage rate of shipments falling past their stated estimated delivery deadline.
+        tests:
+          - not_null
+
+      - name: delay_rank
+        description: Dense ordering rank across paths based on average delay length (1 = worst performing).
+        tests:
+          - not_null
+
+  # 4. Payment Behavior Mart ───────────────────────────────────────────────────
+  - name: mart_payment_behavior
+    description: >
+      Exposes a dual-grain stacked UNION matrix assessing performance benchmarks against order variables.
+      Exposes two analysis vectors: 'installment_bucket' distributions and categorical 'payment_type' metrics.
+      Grain: One row per specific dimension_type + dimension_value combination.
+    columns:
+      - name: dimension_type
+        description: Vector segmentation flag distinguishing the logical grain context of the row.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['installment_bucket', 'payment_type']
+
+      - name: dimension_value
+        description: The evaluation label mapping matching attributes directly to the parent dimension criteria.
+        tests:
+          - not_null
+
+      - name: order_count
+        description: Unique count of customer orders associated with this specific metric slice.
+        tests:
+          - not_null
+
+      - name: avg_order_value
+        description: Average monetary value calculated per basket within this payment context.
+        tests:
+          - not_null
+
+      - name: cancellation_rate_pct
+        description: Percentage rate of orders matching this criteria resulting in canceled operational status.
+        tests:
+          - not_null
+
+  # 5. RFM Segmentation Mart ───────────────────────────────────────────────────
+  - name: mart_rfm_segmentation
+    description: >
+      Strategic marketing model categorizing buyers via relative NTILE distributions tracking 
+      Recency (days since last purchase), Frequency (lifetime orders), and Monetary (lifetime value) tiers.
+      Grain: One row per customer_unique_id.
+    columns:
+      - name: customer_unique_id
+        description: The primary key. Unique baseline customer identification attribute.
+        tests:
+          - not_null
+          - unique
+
+      - name: total_orders
+        description: Base frequency factor counting completed deliveries.
+        tests:
+          - not_null
+
+      - name: total_spend
+        description: Cumulative base monetary spending calculated over the customer lifecycle.
+        tests:
+          - not_null
+
+      - name: days_since_last_order
+        description: Chronological recency tracking distance to the dataset ceiling anchor date.
+        tests:
+          - not_null
+
+      - name: r_score
+        description: Recency value tier. (5 = Most recent, 1 = Most stagnant).
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+
+      - name: f_score
+        description: Frequency value tier. (5 = Most orders, 1 = Lowest transactional footprint).
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+
+      - name: m_score
+        description: Monetary value tier. (5 = Heaviest spenders, 1 = Micro transaction volumes).
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+
+      - name: rfm_total
+        description: "Summative composite baseline value metric across parameters (Min: 3, Max: 15)."
+        tests:
+          - not_null
+
+      - name: segment
+        description: Clean human-readable operational lifecycle cohort mapping out behavior categories.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [
+                'Champion', 
+                'Loyal', 
+                'New Customer', 
+                'Potential Loyalist', 
+                'At Risk', 
+                'Lost', 
+                'Cant Lose Them', 
+                'Needs Attention'
+              ]
+
+  # 6. Seller Performance Mart ─────────────────────────────────────────────────
+  - name: mart_seller_performance
+    description: >
+      Evaluates seller-level operational metrics, performance quartiles, and delivery efficiency.
+      Grain: One row per seller_id.
+    columns:
+      - name: seller_id
+        description: The primary key. Unique marketplace seller identification token.
+        tests:
+          - not_null
+          - unique
+
+      - name: seller_state
+        description: Standard regional base operation state code.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Aggregated absolute revenue calculated over fulfillment operations.
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        description: On-time delivery rate percentage. Measures orders completed on or before the estimated timeline.
+        tests:
+          - not_null
+
+      - name: revenue_quartile
+        description: Revenue distribution ranking indicator (4 = Top 25% earner, 1 = Lowest 25% bracket).
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+
+      - name: review_quartile
+        description: Review satisfaction distribution indicator (4 = Top tier scores, 1 = Lowest tier score trends).
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+
+      - name: active_months
+        description: Total span of months this vendor has operated transactions on the platform (inclusive).
+        tests:
+          - not_null
+
+      - name: review_score_bucket
+        description: Grouped categorical bucket classification tracking review rating bounds.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["High (4-5)", "Medium (3-4)", "Low (<3)"]

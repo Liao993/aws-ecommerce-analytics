@@ -18,7 +18,7 @@ renamed as (
 
         -- Attributes
         cast(customer_zip_code_prefix as varchar(16))  as zip_code_prefix,
-        customer_city                                   as city,
+        customer_city                                   as customer_city,
         customer_state                                  as customer_state
 
     from source

@@ -3,19 +3,10 @@
 /*
   int_customer_orders_enriched
   ------------------------------
-  Aggregates order history to the unique customer level.
-  Provides the heavy-lifting calculations required for RFM segmentation,
-  cohort analyses, and customer-centric retention logic.
+  Enriches individual order data with customer identifiers, sequencing,
+  and behavioral timelines. 
 
-  Key derived columns:
-    recency_days            — Days elapsed since the customer's last order
-    frequency_orders        — Total volume of orders placed by this unique customer
-    monetary_value          — Total historical revenue spent by this customer
-    avg_order_value         — Average basket size per order
-    is_repeat_customer      — Flags if a customer has bought more than once (1 or 0)
-
-  Grain: one row per customer_unique_id.
-  Used by: mart_customer_cohorts, mart_rfm_segmentation.
+  Grain: one row per customer order.
 */
 
 with orders as (
@@ -40,64 +31,49 @@ order_financials as (
     group by 1
 ),
 
--- Step 2: Combine orders, financials, and customer identifiers
-orders_joined as (
+-- Step 2: Combine orders, financials, and calculate customer-specific timelines
+orders_sequenced as (
     select
         o.order_id,
         c.customer_unique_id,
         o.order_purchase_timestamp,
-        coalesce(f.order_item_total, 0) as order_value
+        coalesce(f.order_item_total, 0) as order_value,
+        
+        -- Order sequence per customer: 1 = first order, 2 = second, etc.
+        row_number() over (
+            partition by c.customer_unique_id 
+            order by o.order_purchase_timestamp asc
+        ) as order_sequence,
+
+        -- Pull out the customer's definitive first purchase timestamp across all history
+        min(o.order_purchase_timestamp) over (
+            partition by c.customer_unique_id
+        ) as first_order_timestamp
+
     from orders o
     left join customers c
         on o.customer_id = c.customer_id
     left join order_financials f
         on o.order_id = f.order_id
-    -- Standard practice for e-commerce metrics: exclude canceled/unavail orders
     where o.order_status not in ('canceled', 'unavailable')
 ),
 
--- Step 3: Aggregate directly to the Customer Grain
-customer_aggregations as (
-    select
-        customer_unique_id,
-        min(order_purchase_timestamp)   as first_order_timestamp,
-        max(order_purchase_timestamp)   as last_order_timestamp,
-        count(distinct order_id)        as frequency_orders,
-        sum(order_value)                as monetary_value
-    from orders_joined
-    group by 1
-),
-
--- Step 4: Final calculations for Customer behavior and metrics
+-- Step 3: Compute final delta metrics at the order level
 final as (
     select
+        order_id,
         customer_unique_id,
+        order_purchase_timestamp,
+        order_value,
+        order_sequence,
         first_order_timestamp,
-        last_order_timestamp,
-        frequency_orders,
-        monetary_value,
-
-        -- Derived Customer metrics
-        case 
-            when frequency_orders > 0 then round(monetary_value / frequency_orders, 2)
-            else 0 
-        end                                                     as avg_order_value,
-
-        case when frequency_orders > 1 then 1 else 0 end        as is_repeat_customer,
-
-        -- Recency: Days since last order relative to the current timestamp (or data ceiling)
-        -- Note: In a live pipeline, you use CURRENT_TIMESTAMP. 
-        -- For the static Olist dataset, using the max date in the system prevents massive recency values.
-        datediff(
-            'day', 
-            last_order_timestamp, 
-            (select max(order_purchase_timestamp) from orders)
-        )                                                       as recency_days,
-
-        -- Cohort analysis helper: Extract month of first acquisition
-        date_trunc('month', first_order_timestamp)               as cohort_month
-
-    from customer_aggregations
+        
+        -- Calculated field requested for cohort analysis
+        datediff('day', first_order_timestamp, order_purchase_timestamp) as days_since_first_order,
+        
+        -- Cohort month assignment
+        date_trunc('month', first_order_timestamp) as cohort_month
+    from orders_sequenced
 )
 
 select * from final

@@ -5,7 +5,7 @@
         target_schema  = 'staging',
         unique_key     = 'seller_id',
         strategy       = 'check',
-        check_cols     = ['zip_code_prefix', 'city', 'state'],
+        check_cols     = ['zip_code_prefix', 'seller_city', 'seller_state'],
     )
 }}
 
@@ -15,7 +15,7 @@
 select
     seller_id,
     zip_code_prefix,
-    city,
+    seller_city,
     seller_state
 from {{ ref('stg_sellers') }}
 
