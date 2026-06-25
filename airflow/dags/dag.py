@@ -72,6 +72,8 @@ from tasks.dbt_tasks import (
     make_dbt_marts_task,
     make_dbt_snapshot_task,
     make_dbt_staging_task,
+    make_dbt_source_freshness_task,   # ← ADD
+    make_dbt_test_task,               # ← ADDｓ
 )
 from tasks.glue_tasks import (
     make_csv_to_parquet_task,
@@ -137,11 +139,20 @@ with DAG(
     # Runs only after ALL three GX tasks succeed (or are manually cleared).
     load_redshift = make_load_to_redshift_task()
 
-    # ── Tasks 7–10: dbt transformation chain ─────────────────────
+     # ── Task 7: dbt source freshness ───────────────────────
+    # Runs BEFORE dbt run. Checks that raw source tables were loaded
+    # recently enough. WARNs on historical Olist data — that's expected.
+    # In production this would be blocking (no || true).
+    dbt_freshness    = make_dbt_source_freshness_task()
+
+    # ── Tasks 8–11: dbt transformation chain ─────────────────────
     dbt_staging      = make_dbt_staging_task()
     dbt_intermediate = make_dbt_intermediate_task()
     dbt_marts        = make_dbt_marts_task()
     dbt_snapshot     = make_dbt_snapshot_task()
+
+    # ── Task 12: dbt test all ────────────────────────────────────
+    dbt_test_all     = make_dbt_test_task()
 
     # Add after the dbt_snapshot task definition:
     refresh_gx_docs = make_refresh_gx_docs_task(dag)
@@ -158,8 +169,8 @@ with DAG(
     # Fan-in: Redshift load waits for ALL GX tasks to pass
     data_quality_group >> load_redshift
 
-    # Sequential dbt chain: each layer depends on the one before
-    load_redshift >> dbt_staging >> dbt_intermediate >> dbt_marts >> dbt_snapshot
+     # dbt chain: freshness check → staging → snapshot → intermediate → marts → full test
+    load_redshift >> dbt_freshness >> dbt_staging >> dbt_snapshot >> dbt_intermediate >> dbt_marts >> dbt_test_all
 
     # Wire it at the end of the dependency chain:
-    dbt_snapshot >> refresh_gx_docs
+    dbt_test_all >> refresh_gx_docs
