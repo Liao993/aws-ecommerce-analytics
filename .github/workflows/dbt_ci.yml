@@ -86,13 +86,26 @@ jobs:
       # ───────────────────────────────────────────────────────────
       # 5. Write profiles.yml inline
       #
-      # profiles.yml is NEVER committed to the repo — it contains
-      # the Redshift host and credentials. Instead we write it at
-      # runtime to a temp directory ($DBT_PROFILES_DIR) that only
-      # exists for the life of this runner.
+      # IMPORTANT — schema: dev (NOT dev_staging)
       #
-      # schema: dev_staging — dbt appends the layer suffix per
-      # dbt_project.yml config (dev_staging, dev_seeds, etc.)
+      # dbt constructs the final Redshift schema name by combining
+      # the profile schema value with the layer folder name from
+      # dbt_project.yml. The formula is:
+      #
+      #   final_schema = profile_schema + "_" + layer_folder
+      #
+      # So with schema: dev:
+      #   models/staging/      → dev_staging     ✓
+      #   models/intermediate/ → dev_intermediate ✓
+      #   models/marts/        → dev_marts        ✓
+      #   seeds/               → dev_seeds        ✓
+      #
+      # If you set schema: dev_staging instead, dbt generates:
+      #   models/staging/      → dev_staging_staging  ✗  (doesn't exist)
+      #   models/intermediate/ → dev_staging_intermediate ✗
+      #
+      # This double-suffix is the most common CI misconfiguration
+      # on dbt + Redshift projects. Keep schema: dev here.
       # ───────────────────────────────────────────────────────────
 
       - name: Write dbt profiles.yml
@@ -110,7 +123,7 @@ jobs:
                 user: ${{ secrets.REDSHIFT_USER }}
                 password: ${{ secrets.REDSHIFT_PASSWORD }}
                 dbname: ${{ secrets.REDSHIFT_DBNAME }}
-                schema: dev_staging
+                schema: dev
                 threads: 4
                 connect_timeout: 30
                 ra3_node: true
@@ -138,11 +151,10 @@ jobs:
       #     {{ ref('product_category_name_translation') }}
       #   dbt compile resolves ALL ref() calls before running SQL.
       #   If the seed table doesn't exist in Redshift when compile
-      #   runs, dbt raises "node not found" and compile fails — even
-      #   though the CSV file is committed to the repo.
+      #   runs, dbt raises "node not found" and compile fails.
       #
-      #   dbt seed creates the dev_seeds.product_category_name_translation
-      #   table so the ref() in stg_products resolves correctly.
+      #   dbt seed creates dev_seeds.product_category_name_translation
+      #   so the ref() in stg_products resolves correctly.
       #
       # Seeds load to dev_seeds schema (set in dbt_project.yml).
       # The 73-row CSV takes under 1 second. Cost: negligible.
@@ -155,12 +167,11 @@ jobs:
       # ───────────────────────────────────────────────────────────
       # 8. dbt compile
       #
-      # What compile catches (runs locally — zero extra Redshift cost
-      # beyond the seed load above):
+      # What compile catches (pure local parse — no Redshift queries):
       #   ✓ Broken ref() — model renamed but reference not updated
-      #   ✓ Missing source — source name doesn't match sources.yml
+      #   ✓ Missing source — name doesn't match sources.yml
       #   ✓ Malformed Jinja — unclosed block, wrong macro syntax
-      #   ✓ Missing models — a ref() points to a file that doesn't exist
+      #   ✓ Missing models — ref() points to a file that doesn't exist
       #
       # What compile does NOT catch:
       #   ✗ Bad SQL logic — wrong column name, wrong join condition
@@ -199,7 +210,7 @@ jobs:
       # Tests run per model (defined in schema.yml):
       #   - not_null on all key columns and non-nullable business columns
       #   - unique on surrogate keys and natural keys where applicable
-      #   - accepted_values on status/categorical columns (e.g. review_score)
+      #   - accepted_values on status/categorical columns
       #   - relationships tests on FK columns where configured
       # ───────────────────────────────────────────────────────────
 
