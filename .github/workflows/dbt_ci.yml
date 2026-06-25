@@ -120,7 +120,7 @@ jobs:
                 user: ${{ secrets.REDSHIFT_USER }}
                 password: ${{ secrets.REDSHIFT_PASSWORD }}
                 dbname: ${{ secrets.REDSHIFT_DBNAME }}
-                schema: dev_staging
+                schema: dev
                 threads: 4
                 connect_timeout: 30
                 ra3_node: true

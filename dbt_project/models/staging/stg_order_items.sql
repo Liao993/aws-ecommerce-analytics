@@ -8,7 +8,7 @@
 
 with source as (
 
-    select * from {{ source('dev_raw', 'olist_order_items') }}
+    select * from {{ source('raw', 'olist_order_items') }}
 
     {% if is_incremental() %}
         -- Lookback 3 days. Using shipping_limit_date as the incremental column

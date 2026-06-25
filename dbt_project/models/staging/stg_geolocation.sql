@@ -1,7 +1,7 @@
 {{ config(materialized='view') }}
 
 with source as (
-    select * from {{ source('dev_raw', 'olist_geolocation') }}
+    select * from {{ source('raw', 'olist_geolocation') }}
 ),
 
 -- Aggregate to one row per zip_code_prefix using centroid (average lat/lng).

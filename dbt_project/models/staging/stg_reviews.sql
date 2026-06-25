@@ -8,7 +8,7 @@
 
 with source as (
 
-    select * from {{ source('dev_raw', 'olist_order_reviews') }}
+    select * from {{ source('raw', 'olist_order_reviews') }}
 
     {% if is_incremental() %}
         -- Filter early in the source CTE to optimize query costs and speed.

@@ -14,7 +14,7 @@ version: 2
 # ─────────────────────────────────────────────────────────────────
 
 sources:
-  - name: dev_raw
+  - name: raw
     schema: dev_raw
     description: >
       Raw Olist e-commerce tables loaded by the Glue load_to_redshift job.
