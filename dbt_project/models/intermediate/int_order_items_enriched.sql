@@ -33,6 +33,7 @@ final as (
         oi.order_item_key,
         oi.product_id,
         oi.seller_id,
+       
 
         -- Product attributes (Now directly cleaned from the updated stg_products)
         p.category_name_pt,
@@ -54,8 +55,8 @@ final as (
         end                                                     as freight_pct_of_price,
 
           -- Geography
-        s.seller_state                                     as seller_state
-    
+        s.seller_state                                     as seller_state,
+        s.seller_city                                      as seller_city
 
     from order_items oi
     left join products p
