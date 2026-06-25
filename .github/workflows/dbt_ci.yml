@@ -27,16 +27,10 @@ jobs:
     #
     # GitHub Secrets (${{ secrets.NAME }}) are encrypted at rest
     # in GitHub and are NEVER printed in logs — GitHub masks them
-    # automatically. They are the right place for credentials:
-    # passwords, host URLs, API keys. You set them once in the
-    # repo UI and reference them here.
+    # automatically. They are the right place for credentials.
     #
     # Environment variables (env: block) are plain key-value pairs
-    # that ARE visible in the workflow YAML and in the runner's
-    # process environment. Use them for non-sensitive config:
-    # region, schema names, project names. You can combine both —
-    # inject a Secret into an env var to give it a cleaner name
-    # inside run: steps, but the value stays masked in logs.
+    # visible in the YAML. Use for non-sensitive config only.
     #
     # Rule: if it's a credential → secrets.*
     #       if it's config/non-sensitive → env: block directly
@@ -97,17 +91,8 @@ jobs:
       # runtime to a temp directory ($DBT_PROFILES_DIR) that only
       # exists for the life of this runner.
       #
-      # ${{ secrets.NAME }} pulls from GitHub Secrets (encrypted).
-      # The values are masked in logs — GitHub replaces them with ***.
-      #
-      # The heredoc (cat << EOF) writes the file in one shell step.
-      # Indentation matters in YAML profiles — keep the two-space
-      # indent inside the heredoc exactly as shown.
-      #
-      # schema: dev_staging — dbt appends the layer suffix automatically
-      # (dev_staging, dev_intermediate, dev_marts) based on dbt_project.yml.
-      # Setting schema: dev here matches the dev target in profiles.yml
-      # and lets dbt build the correct schema names per layer.
+      # schema: dev_staging — dbt appends the layer suffix per
+      # dbt_project.yml config (dev_staging, dev_seeds, etc.)
       # ───────────────────────────────────────────────────────────
 
       - name: Write dbt profiles.yml
@@ -143,9 +128,35 @@ jobs:
         run: dbt deps --project-dir .
 
       # ───────────────────────────────────────────────────────────
-      # 7. dbt compile
+      # 7. dbt seed
       #
-      # What compile catches (runs locally — zero Redshift cost):
+      # Loads static reference CSVs from dbt_project/seeds/ into
+      # Redshift before compile and test run.
+      #
+      # Why this is required in CI:
+      #   stg_products.sql references:
+      #     {{ ref('product_category_name_translation') }}
+      #   dbt compile resolves ALL ref() calls before running SQL.
+      #   If the seed table doesn't exist in Redshift when compile
+      #   runs, dbt raises "node not found" and compile fails — even
+      #   though the CSV file is committed to the repo.
+      #
+      #   dbt seed creates the dev_seeds.product_category_name_translation
+      #   table so the ref() in stg_products resolves correctly.
+      #
+      # Seeds load to dev_seeds schema (set in dbt_project.yml).
+      # The 73-row CSV takes under 1 second. Cost: negligible.
+      # ───────────────────────────────────────────────────────────
+
+      - name: dbt seed
+        working-directory: ${{ env.DBT_PROJECT_DIR }}
+        run: dbt seed --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
+
+      # ───────────────────────────────────────────────────────────
+      # 8. dbt compile
+      #
+      # What compile catches (runs locally — zero extra Redshift cost
+      # beyond the seed load above):
       #   ✓ Broken ref() — model renamed but reference not updated
       #   ✓ Missing source — source name doesn't match sources.yml
       #   ✓ Malformed Jinja — unclosed block, wrong macro syntax
@@ -154,7 +165,7 @@ jobs:
       # What compile does NOT catch:
       #   ✗ Bad SQL logic — wrong column name, wrong join condition
       #   ✗ Type mismatches — VARCHAR cast to INTEGER failing at runtime
-      #   ✗ Data quality — nulls in not_null columns, duplicates in unique columns
+      #   ✗ Data quality — nulls in not_null columns, duplicates
       #   Those are caught by dbt test (next step) which hits Redshift.
       # ───────────────────────────────────────────────────────────
 
@@ -163,34 +174,33 @@ jobs:
         run: dbt compile --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
 
       # ───────────────────────────────────────────────────────────
-      # 8. dbt test — all staging models
+      # 9. dbt test — all staging models
       #
       # CHANGED in Feature 4.6 (was: --select stg_orders in Epic 1)
       # NOW: --select staging  covers all 8 staging models:
       #   stg_orders, stg_customers, stg_order_items, stg_products,
-      #   stg_sellers, stg_order_payments, stg_order_reviews, stg_geolocation
+      #   stg_sellers, stg_payments, stg_reviews, stg_geolocation
       #
       # Why we expanded now:
       #   In Epic 1, stg_orders was the only staging model — scoping CI
       #   to it was correct. Now there are 8 staging models. A gate that
       #   covers 1 of 8 is not a real gate: a broken stg_customers could
-      #   merge to develop, silently fail the next pipeline run, and surface
-      #   as an Airflow error hours later rather than a PR comment now.
-      #   CI scope grows as the codebase grows.
+      #   merge to develop, silently fail the next pipeline run, and
+      #   surface as an Airflow error hours later rather than a PR
+      #   comment now. CI scope grows as the codebase grows.
       #
       # Why we do NOT test intermediate and marts in CI:
       #   Intermediate and mart tests require full Redshift scans across
-      #   all rows and multi-table joins — slower and more expensive than
-      #   staging tests. They're validated locally before the PR is opened.
-      #   CI targets the staging layer because it's the most common
-      #   regression surface: direct source dependencies, column renames,
-      #   and type casts that break if the source schema changes.
+      #   all rows and multi-table joins — slower and more expensive.
+      #   They're validated locally before the PR is opened. CI targets
+      #   staging because it's the most common regression surface:
+      #   direct source dependencies, column renames, type casts.
       #
       # Tests run per model (defined in schema.yml):
       #   - not_null on all key columns and non-nullable business columns
       #   - unique on surrogate keys and natural keys where applicable
-      #   - accepted_values on status/categorical columns
-      #   - relationships tests on FK columns (where configured)
+      #   - accepted_values on status/categorical columns (e.g. review_score)
+      #   - relationships tests on FK columns where configured
       # ───────────────────────────────────────────────────────────
 
       - name: dbt test (staging layer — all 8 models)
@@ -198,7 +208,7 @@ jobs:
         run: dbt test --select staging --project-dir . --profiles-dir $DBT_PROFILES_DIR --target $DBT_TARGET
 
       # ───────────────────────────────────────────────────────────
-      # 9. Post — clean up profiles.yml
+      # 10. Post — clean up profiles.yml
       # Defensive step: wipe the credentials file from the runner
       # even though GitHub destroys the entire VM after the job.
       # Signals intent in code reviews that secrets are treated carefully.
