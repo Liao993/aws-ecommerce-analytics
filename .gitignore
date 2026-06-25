@@ -17,7 +17,6 @@ target/
 *.db
 *.sqlite
 *.parquet
-*.csv
 
 
 

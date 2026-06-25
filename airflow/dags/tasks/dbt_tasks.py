@@ -160,3 +160,73 @@ def make_dbt_snapshot_task() -> BashOperator:
         task_id      = "dbt_snapshot",
         bash_command = _dbt_snapshot_command(),
     )
+
+# ADD THIS at the bottom of airflow/dags/tasks/dbt_tasks.py
+
+def make_dbt_source_freshness_task() -> BashOperator:
+    """
+    Task 6.5: Run dbt source freshness check.
+
+    Checks MAX(loaded_at_field) on each configured source table and compares
+    it to NOW(). If data is too old, dbt raises a warning or error.
+
+    For this project (static Olist 2016–2018 data): freshness will always WARN
+    because the data is years old. This is correct and expected — the check is
+    configured to demonstrate the pattern. In production, this would be the
+    first gate in the pipeline: if freshness fails, dbt run never executes.
+
+    The trailing `|| true` means a WARN/ERROR from freshness does not block
+    downstream Airflow tasks on this historical dataset. Remove `|| true` in
+    a production pipeline where data is live.
+
+    Returns:
+        BashOperator task object.
+    """
+    container    = DBT_CONFIG["container"]
+    project_dir  = DBT_CONFIG["project_dir"]
+    profiles_dir = DBT_CONFIG["profiles_dir"]
+    target       = DBT_CONFIG["target"]
+
+    return BashOperator(
+        task_id      = "dbt_source_freshness",
+        bash_command = (
+            f"docker exec {container} "
+            f"dbt source freshness "
+            f"--project-dir {project_dir} "
+            f"--profiles-dir {profiles_dir} "
+            f"--target {target} "
+            f"|| true"
+            # || true: freshness always WARNs on historical Olist data (2016-2018).
+            # This prevents Airflow from blocking the pipeline on expected warnings.
+            # In production with live data, remove || true — freshness should be blocking.
+        ),
+    )
+
+
+def make_dbt_test_task() -> BashOperator:
+    """
+    Task 11: Run the full dbt test suite across all layers.
+
+    Runs dbt test with no selector — covers staging, intermediate, and marts.
+    Placed at the end of the pipeline so all models are materialized before
+    tests run. Fails the Airflow task (and blocks nothing downstream, since
+    this is the last task) if any test fails.
+
+    Returns:
+        BashOperator task object.
+    """
+    container    = DBT_CONFIG["container"]
+    project_dir  = DBT_CONFIG["project_dir"]
+    profiles_dir = DBT_CONFIG["profiles_dir"]
+    target       = DBT_CONFIG["target"]
+
+    return BashOperator(
+        task_id      = "dbt_test_all_layers",
+        bash_command = (
+            f"docker exec {container} "
+            f"dbt test "
+            f"--project-dir {project_dir} "
+            f"--profiles-dir {profiles_dir} "
+            f"--target {target}"
+        ),
+    )

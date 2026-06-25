@@ -27,6 +27,10 @@ sources:
       # ── Transactional tables ──────────────────────────────────
 
       - name: olist_orders
+        loaded_at_field: order_purchase_timestamp
+        freshness:
+          warn_after:  {count: 3200,  period: day}
+          error_after: {count: 3500, period: day}
         description: >
           One row per order. Central transactional table linking customers
           to all downstream order activity. ~99K rows.
@@ -52,6 +56,10 @@ sources:
             description: Estimated delivery date shown to the customer at purchase time.
 
       - name: olist_order_items
+        loaded_at_field: shipping_limit_date
+        freshness:
+          warn_after:  {count: 3200,  period: day}
+          error_after: {count: 3500, period: day}
         description: >
           One row per item per order. ~112K rows — highest-cardinality transactional table.
           Composite key: order_id + order_item_id. A single order can contain
@@ -96,6 +104,11 @@ sources:
             description: Payment amount for this row in BRL.
 
       - name: olist_order_reviews
+        loaded_at_field: review_creation_date
+        freshness:
+          warn_after:  {count: 3200,  period: day}
+          error_after: {count: 3500, period: day}
+
         description: >
           One row per review. ~100K rows.
           review_id is ~95% unique — known source data quirk documented
