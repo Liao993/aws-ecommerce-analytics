@@ -8,7 +8,7 @@
 
 with olist_orders as (
 
-    select * from {{ source('dev_raw', 'olist_orders') }}
+    select * from {{ source('raw', 'olist_orders') }}
 
 
     {% if is_incremental() %}

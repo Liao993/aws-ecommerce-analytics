@@ -1,7 +1,7 @@
 {{ config(materialized='view') }}
 
 with source as (
-    select * from {{ source('dev_raw', 'olist_sellers') }}
+    select * from {{ source('raw', 'olist_sellers') }}
 ),
 
 renamed as (
@@ -13,7 +13,7 @@ renamed as (
         -- Attributes
         cast(seller_zip_code_prefix as varchar(16))    as zip_code_prefix,
         seller_city                                     as city,
-        seller_state                                    as state
+        seller_state                                    as seller_state
 
     from source
 )

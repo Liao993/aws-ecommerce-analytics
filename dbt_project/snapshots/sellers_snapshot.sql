@@ -2,7 +2,7 @@
 
 {{
     config(
-        target_schema  = 'dev_staging',
+        target_schema  = 'staging',
         unique_key     = 'seller_id',
         strategy       = 'check',
         check_cols     = ['zip_code_prefix', 'city', 'state'],
@@ -16,7 +16,7 @@ select
     seller_id,
     zip_code_prefix,
     city,
-    state
+    seller_state
 from {{ ref('stg_sellers') }}
 
 {% endsnapshot %}

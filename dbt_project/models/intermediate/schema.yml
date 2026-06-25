@@ -1,8 +1,70 @@
 version: 2
 
-# Intermediate models — built in Epic 4.
-# These are pre-aggregations and joins between staging models,
-# preparing data for the mart layer.
-# Examples: int_order_items_enriched, int_customer_orders_summary
+models:
+  - name: int_orders_enriched
+    description: >
+      Orders joined with customers, payments, and reviews. One row per order.
+      Derives delivery_delay_days, total_order_value, and is_on_time.
+    columns:
+      - name: order_id
+        description: Natural key from stg_orders.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: FK to stg_customers.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+      - name: total_order_value
+        description: Sum of all payment values for this order. 0 if no payment record.
+        tests:
+          - not_null
+      - name: delivery_delay_days
+        description: Actual minus estimated delivery in days. Positive = late. NULL if not delivered.
 
-models: []
+  - name: int_order_items_enriched
+    description: >
+      Order items joined with products, sellers, and category translation.
+      Derives freight_pct_of_price and English category name.
+    columns:
+      - name: order_item_key
+        description: Composite surrogate key on order_id + order_item_id.
+        tests:
+          - not_null
+          - unique
+      - name: seller_id
+        description: FK to stg_sellers.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_sellers')
+              field: seller_id
+
+  - name: int_customer_orders
+    description: >
+      Orders with customer sequence numbers. Identifies first-time vs repeat orders.
+      Uses customer_unique_id (not customer_id) for correct person-level sequencing.
+    columns:
+      - name: customer_unique_id
+        description: primary key
+        tests:
+          - not_null
+          - unique
+
+
+  - name: int_delivery_analysis
+    description: >
+      Order items with full delivery context. Origin state, destination state,
+      corridor label, and delivery timing. Filtered to delivered orders only.
+    columns:
+      - name: order_id
+        description: FK to int_orders_enriched.
+        tests:
+          - not_null
+      - name: corridor
+        description: "Origin to destination state label. Format: 'SP -> RJ'."
+        tests:
+          - not_null

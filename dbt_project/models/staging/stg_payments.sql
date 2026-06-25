@@ -1,7 +1,7 @@
 {{ config(materialized='view') }}
 
 with source as (
-    select * from {{ source('dev_raw', 'olist_order_payments') }}
+    select * from {{ source('raw', 'olist_order_payments') }}
 ),
 
 renamed as (
