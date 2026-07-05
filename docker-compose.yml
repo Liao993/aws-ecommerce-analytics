@@ -128,12 +128,12 @@ services:
     volumes:
       - ./dashboards:/app
     ports:
-      - "8503:8501"
+      - "8503:8503"
     env_file:
       - .env
     networks:
       - olist_network
-    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8503"]
 
   # ── terraform — IaC layer ─────────────────────────────────────
   # Use exec, not run:

@@ -6,16 +6,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy requirements first — layer caching means pip only re-runs when this changes
 COPY dashboards/requirements.txt ./requirements.txt
 
-RUN pip install --no-cache-dir \
-    streamlit \
-    plotly \
-    redshift_connector \
-    boto3
+RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 85031
+EXPOSE 8503
 
-# Streamlit must bind to 0.0.0.0 inside Docker to be reachable from the host
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8503"]
