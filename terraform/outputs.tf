@@ -42,3 +42,13 @@ output "glue_crawler_name" {
   description = "Name of the Glue raw crawler"
   value       = aws_glue_crawler.dev_raw.name
 }
+
+output "ec2_public_ip" {
+  description = "Public IP of the olist-analytics EC2 instance"
+  value       = aws_instance.olist_analytics.public_ip
+}
+
+output "ec2_instance_id" {
+  description = "Instance ID of the olist-analytics EC2 instance"
+  value       = aws_instance.olist_analytics.id
+}

@@ -540,3 +540,155 @@ resource "aws_glue_job" "load_to_redshift" {
 
   tags = { Role = "senior-de" }
 }
+
+# ─────────────────────────────────────────────────────────────────
+# EC2 — Security Group
+# Manages inbound rules for the analytics host.
+# Ports: 22 (SSH), 8080 (Airflow), 8503 (Streamlit)
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_security_group" "olist_analytics" {
+  name        = "olist-analytics-sg"
+  description = "Security group for olist-analytics EC2: SSH, Airflow UI, Streamlit"
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]  # Restrict to your IP in production
+  }
+
+  ingress {
+    description = "Airflow webserver"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "Streamlit dashboard"
+    from_port   = 8503
+    to_port     = 8503
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "olist-analytics-sg" }
+}
+
+# ─────────────────────────────────────────────────────────────────
+# EC2 — IAM Role + Instance Profile
+# Lets EC2 call AWS APIs without credentials on disk.
+# Permissions: S3 read (processed data), Redshift read (GetCredentials),
+# CloudWatch logs (for Airflow log shipping), Glue read (crawler status).
+# ─────────────────────────────────────────────────────────────────
+
+data "aws_iam_policy_document" "assume_role_ec2" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ec2" {
+  name               = "${var.project_name}-ec2-role"
+  assume_role_policy = data.aws_iam_policy_document.assume_role_ec2.json
+  tags               = { Role = "ec2" }
+}
+
+data "aws_iam_policy_document" "ec2_perms" {
+  statement {
+    sid    = "S3ReadProcessed"
+    effect = "Allow"
+    actions = ["s3:GetObject", "s3:ListBucket"]
+    resources = [
+      aws_s3_bucket.data_lake.arn,
+      "${aws_s3_bucket.data_lake.arn}/dev/processed/*",
+    ]
+  }
+
+  statement {
+    sid    = "RedshiftGetCredentials"
+    effect = "Allow"
+    actions = [
+      "redshift-serverless:GetCredentials",
+      "redshift-data:ExecuteStatement",
+      "redshift-data:DescribeStatement",
+      "redshift-data:GetStatementResult",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "CloudWatchLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "GlueRead"
+    effect = "Allow"
+    actions = [
+      "glue:GetJob", "glue:GetJobRun", "glue:GetJobRuns",
+      "glue:GetCrawler", "glue:StartCrawler",
+      "glue:GetDatabase", "glue:GetTable",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ec2" {
+  name   = "${var.project_name}-ec2-policy"
+  role   = aws_iam_role.ec2.id
+  policy = data.aws_iam_policy_document.ec2_perms.json
+}
+
+resource "aws_iam_instance_profile" "ec2" {
+  name = "${var.project_name}-ec2-instance-profile"
+  role = aws_iam_role.ec2.name
+}
+
+# ─────────────────────────────────────────────────────────────────
+# EC2 — Instance
+# AMI: Amazon Linux 2023 in ca-central-1
+# Key pair name is passed as a variable (your existing olist-key pair)
+# ─────────────────────────────────────────────────────────────────
+
+resource "aws_instance" "olist_analytics" {
+  # Amazon Linux 2023 AMI for ca-central-1 (verify this is current at time of apply)
+  # To find the latest: Console → EC2 → Launch instance → Search 'Amazon Linux 2023'
+  # Copy the AMI ID shown for ca-central-1
+  ami                    = var.ec2_ami_id
+  instance_type          = "t2.micro"
+  key_name               = var.ec2_key_pair_name
+  vpc_security_group_ids = [aws_security_group.olist_analytics.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2.name
+
+  root_block_device {
+    volume_size = 8
+    volume_type = "gp3"
+  }
+
+  tags = { Name = "olist-analytics" }
+}
