@@ -1,135 +1,103 @@
-# AWS E-Commerce Analytics Pipeline
+# ⚡ AWS E-Commerce Analytics Pipeline (Glue, Redshift, Airflow, dbt & Terraform)
 
-End-to-end data engineering and analytics engineering project built on AWS using the Brazilian Olist e-commerce dataset. The goal is to show how I design, orchestrate, validate, model, and serve a production-style analytics pipeline from raw files to business-ready marts and dashboards.
+![AWS](https://img.shields.io/badge/AWS-%23FF9900.svg?style=for-the-badge&logo=amazon-aws&logoColor=white)
+![AWS Glue](https://img.shields.io/badge/AWS_Glue-FF9900?style=for-the-badge&logo=amazon-aws&logoColor=white)
+![Amazon Redshift](https://img.shields.io/badge/Amazon_Redshift-8C4FFF?style=for-the-badge&logo=amazon-redshift&logoColor=white)
+![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-017CEE?style=for-the-badge&logo=Apache%20Airflow&logoColor=white)
+![dbt](https://img.shields.io/badge/dbt-FF694B?style=for-the-badge&logo=dbt&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
-![AWS architecture design](docs/architecture/aws_architecture_design.png)
+## 📌 Project Overview
+An end-to-end, production-style cloud data engineering pipeline designed to ingest, validate, transform, and model Brazilian e-commerce transaction data (Olist). Built entirely on **AWS infrastructure provisioned via Terraform**, this project demonstrates complex PySpark transformations, automated dual-stage quality gates, Airflow orchestration, and dbt dimensional modeling (Star Schema with SCD Type 2 tracking).
 
-## Hiring-manager summary
+**Engineering Goal:** Build an automated, fully reproducible infrastructure-as-code pipeline that enforces data quality at the ingestion layer, handles schema evolution and historical tracking, and exposes business-ready marts for BI consumption.
 
-- **AWS data engineering:** S3 raw/processed zones, Glue Crawler, Glue ETL, Redshift Serverless, Terraform, and Docker-based local development.
-- **Pipeline orchestration:** Airflow DAG with task factories, fan-out/fan-in quality checks, retries, callbacks, and clear dependency ordering.
-- **Data quality:** Great Expectations checks before loading plus dbt tests after transformation.
-- **Analytics engineering:** dbt staging, intermediate, marts, snapshots, seeds, macros, documentation, and source freshness checks.
-- **Data modeling:** star-schema marts with explicit fact grains, surrogate keys, and Type 2 history for customers and sellers.
-- **Business delivery:** Streamlit dashboard and SQL analyses for seller performance, delivery delays, payments, cohorts, and RFM segmentation.
+---
 
-## Tech stack
+## 🏗️ Architecture & Data Pipeline
 
-| Area | Tools |
-|---|---|
-| Cloud data platform | Amazon S3, AWS Glue, Glue Crawler, Redshift Serverless |
-| Orchestration | Apache Airflow |
-| Transformation | dbt Core, SQL |
-| Data quality | Great Expectations, dbt tests |
-| Infrastructure | Terraform, Docker Compose |
-| Serving layer | Streamlit, Plotly |
-| Language | Python, SQL |
+![AWS Architecture Design](docs/architecture/aws_architecture_design.png)
 
-## Pipeline flow
+1. **Infrastructure Provisioning:** Terraform provisions S3 buckets, IAM roles/policies, Glue Crawlers, and Redshift Serverless resources.
+2. **Ingestion & Processing:** AWS Glue (PySpark) extracts raw relational CSV files from the S3 Raw Zone, enforces schemas, converts data to columnar Parquet format, and lands it in the Processed S3 Zone.
+3. **Pre-Load Data Quality Gate:** Airflow executes a Great Expectations validation suite against the Parquet files in S3. If validation fails, the pipeline halts before touching the warehouse.
+4. **Warehouse Ingestion:** Validated Parquet data is COPY-loaded into Amazon Redshift Serverless staging tables via Glue ETL.
+5. **Analytics Engineering:** dbt transforms staging tables into a production Star Schema, using dbt Snapshots to manage Slowly Changing Dimensions (SCD Type 2).
+6. **Serving Layer:** Modeled marts power an interactive Streamlit application for seller performance, cohort retention, and RFM segmentation analysis.
 
-```text
-Olist CSV files
-  -> S3 raw zone
-  -> Glue Crawler catalog
-  -> Glue ETL CSV-to-Parquet job
-  -> S3 processed zone
-  -> Great Expectations quality checks
-  -> Glue ETL load to Redshift
-  -> dbt staging, intermediate, snapshots, and marts
-  -> dbt tests and documentation
-  -> Streamlit dashboard and SQL analyses
-```
+---
 
-## Modeling highlights
+## ⚙️ Key Data Engineering & Infrastructure Decisions
 
-The dbt project uses a three-layer architecture:
+* **Infrastructure as Code (Terraform):** Entire AWS stack (S3 storage zones, Glue catalog databases, IAM roles, and Redshift Serverless) is defined declaratively in Terraform, enabling repeatable environment provisioning and tear-downs.
+* **PySpark Parquet Conversion:** Converted raw CSVs to partitioned Parquet files prior to warehouse ingestion. This optimizes S3 storage footprints and drastically accelerates downstream `COPY` command speeds into Redshift.
+* **Dual-Layer Quality Enforcement (Circuit-Breaker Pattern):**
+  * *Pre-Load (Great Expectations):* Asserts nullability, schema types, and value bounds on S3 Parquet files *before* staging in Redshift.
+  * *Post-Load (dbt Tests):* Validates primary keys, surrogate key uniqueness, non-null constraints, and referential integrity inside Redshift.
+* **SCD Type 2 Historical Tracking:** Implemented dbt Snapshots on customer and seller dimensional tables to capture attribute changes over time (e.g., location/zip code shifts) without overwriting historical transaction context.
 
-- `staging`: one model per source table for renaming, casting, timestamp standardization, and source cleanup.
-- `intermediate`: reusable business logic for order metrics, delivery calculations, payment aggregation, and customer cohorts.
-- `marts`: analyst-friendly tables for seller performance, delivery analysis, category performance, payment behavior, customer cohorts, and RFM segmentation.
+---
 
-Historical correctness is handled with dbt snapshots for customers and sellers, preserving changing location attributes instead of overwriting history.
+## 🔄 Orchestration (Apache Airflow)
 
-More detail:
+Orchestration utilizes Airflow `TaskGroup` constructs to run multi-file Great Expectations checks in parallel, converging on a single validation gate before triggering Redshift loads.
 
-- [Star schema documentation](docs/architecture/star_schema.md)
-- [OLTP source schema](docs/architecture/oltp_schema.md)
-- [Data model decisions](docs/architecture/data_model_decisions.md)
+![Airflow DAG](docs/screenshots/airflow_dag_screenshot.png)
 
-## Airflow orchestration
+---
 
-The main DAG is [`airflow/dags/dag.py`](airflow/dags/dag.py). It coordinates AWS ingestion, quality checks, warehouse loading, dbt modeling, tests, and documentation.
+## 📐 Dimensional Data Model (Star Schema)
 
-![Airflow pipeline](docs/screenshots/airflow_dag_screenshot.png)
+The analytical layer in Redshift is structured using a Medallion Architecture (Staging → Intermediate → Marts):
 
-The quality checks run in parallel inside an Airflow `TaskGroup`, and the warehouse load waits for every validation task to pass.
+![Star Schema](docs/architecture/star_schema.png)
 
-## Dashboard evidence
+* **`fct_orders` (Fact Table):** Granular at the individual order item level. Contains measures for freight cost, item price, payment installments, and delivery lead times.
+* **`dim_customers` & `dim_sellers` (Dimensions):** Maintained using `dbt snapshots` to preserve location history (`dbt_valid_from`, `dbt_valid_to`).
+* **`dim_products` & `dim_payments` (Dimensions):** Converted product categories and payment type attributes with standardized translation macros.
 
-- [Seller performance](docs/screenshots/tab1_seller_performance.png)
-- [Delivery delays](docs/screenshots/tab2_delivery_delays.png)
-- [Payment behavior](docs/screenshots/tab4_payment_behavior.png)
-- [RFM segmentation](docs/screenshots/tab5_rfm_segmentation.png)
+---
 
-## Business questions answered
+## 📊 Business Delivery & Dashboard Insights
 
-The analysis layer in [`dbt_project/analyses`](dbt_project/analyses) uses the modeled marts to answer questions such as:
+The transformed dbt marts directly feed an interactive **Streamlit** dashboard delivering actionable seller and logistics intelligence:
 
-- Which sellers generate revenue but create customer-experience risk?
-- Which delivery corridors have long actual delivery times or high late rates?
-- How strong is repeat purchase behavior by customer cohort?
-- How does installment usage relate to basket size?
-- Which categories combine high revenue, high volume, and poor reviews?
+**Seller Quality Risk Matrix**  
+Cross-referenced seller revenue with customer review scores to isolate high-volume sellers driving disproportionate refund and negative review requests.
+![Seller Performance](docs/screenshots/tab1_seller_performance.png)
 
-## Best files to review
+**RFM Customer Segmentation & Logistics Bottlenecks**  
+Classified customer cohorts into Recency, Frequency, and Monetary brackets. Identified specific regional freight corridors where actual delivery times exceeded estimated delivery dates by over 25%.
+![RFM Segmentation](docs/screenshots/tab5_rfm_segmentation.png)
 
-```text
-airflow/dags/dag.py           Orchestration flow and dependencies
-glue_jobs/                    Glue ETL jobs for Parquet conversion and Redshift loading
-great_expectations/           Quality checks and validation runner
-dbt_project/models/           Staging, intermediate, and mart models
-dbt_project/snapshots/        Historical customer and seller tracking
-dbt_project/analyses/         Business analysis SQL
-terraform/                    AWS infrastructure definitions
-dashboards/                   Streamlit dashboard application
-```
+*(Additional insights available in the dashboard: [Delivery Delays](docs/screenshots/tab2_delivery_delays.png) & [Payment Behavior](docs/screenshots/tab4_payment_behavior.png))*
 
-## Run locally
+---
 
-Prerequisites:
+## 🚀 Local Development & Setup
 
-- Docker Desktop with Docker Compose
-- AWS credentials configured through `.env` for AWS-backed services
-- Redshift and S3 configuration for the full cloud path
+### Prerequisites
+* Docker Desktop & Docker Compose installed.
+* AWS Account with configured CLI credentials (`~/.aws/credentials`).
+* Terraform CLI installed.
 
-Start the dashboard services:
-
+### 1. Provision AWS Infrastructure via Terraform
 ```bash
+cd terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+### 2. Start Local Airflow & Services
+```bash
+# Build local container instances
 docker compose build
-docker compose up -d dbt gx streamlit
-```
 
-Start Airflow locally:
-
-```bash
+# Initialize and launch Airflow
 docker compose up airflow-init
-docker compose up -d airflow-webserver airflow-scheduler
-```
+docker compose up -d
 
-Dashboard: `http://localhost:8503`
-
-Airflow: `http://localhost:8080`
-
-Useful dbt commands: `dbt run`, `dbt test`, `dbt snapshot`, `dbt compile`
-
-Do not commit `.env`, credentials, access keys, Terraform state, or raw data.
-
-## Project scope
-
-This is a portfolio project designed to demonstrate production-minded data engineering patterns on a manageable public dataset. The Olist dataset is historical, so freshness warnings are expected in local runs. In production, I would add CI/CD deployment controls, row-level reconciliation, observability dashboards, alert routing, and a formal metric layer.
-
-## Data source
-
-Dataset: [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)
-
-Used for educational and portfolio purposes. Please review the source terms before redistributing the data.
+# Spin up Streamlit Dashboard
+docker compose up -d streamlit
